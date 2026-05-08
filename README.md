@@ -4,6 +4,8 @@ An AI-powered Commander deck analysis tool. Submit a `.txt` decklist and receive
 
 For a compact implementation-oriented overview, start with [docs/project-reference.md](docs/project-reference.md). Use [architecture.md](architecture.md) when you need deeper file-by-file detail.
 
+> AI analysis current hallucinates a lot, not recommended to use that functionality at this time
+
 ---
 
 ## Quick Start
