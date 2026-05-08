@@ -1,0 +1,333 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>MTG Commander Deck Review</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <header>
+    <div class="logo">
+      <span class="mana w">&#9651;</span>
+      <span class="mana u">&#9651;</span>
+      <span class="mana b">&#9651;</span>
+      <span class="mana r">&#9651;</span>
+      <span class="mana g">&#9651;</span>
+      <h1>Commander Deck Review</h1>
+    </div>
+    <div class="header-status-group">
+      <div id="bulk-status" class="badge badge-pending" title="Scryfall bulk data age">Data: checking…</div>
+      <div id="index-status" class="badge badge-pending">Index: checking…</div>
+      <button id="update-data-btn" class="btn-update hidden" title="Download latest Scryfall data">&#8635; Update Data</button>
+    </div>
+  </header>
+
+  <!-- Download progress overlay -->
+  <div id="download-overlay" class="download-overlay hidden">
+    <div class="download-box">
+      <div class="download-title">Updating Scryfall Data</div>
+      <div id="download-message" class="download-message">Starting…</div>
+      <div class="download-bar-bg">
+        <div id="download-bar" class="download-bar-fill" style="width:0%"></div>
+      </div>
+      <div id="download-pct" class="download-pct">0%</div>
+    </div>
+  </div>
+
+  <main>
+    <!-- Upload Panel -->
+    <section id="upload-panel" class="panel">
+      <h2>Submit Your Deck</h2>
+
+      <div id="drop-zone" class="drop-zone">
+        <div class="drop-icon">&#128196;</div>
+        <p>Drag &amp; drop your <code>.txt</code> decklist here</p>
+        <p>or <label for="file-input" class="link-label">click to browse</label></p>
+        <input type="file" id="file-input" accept=".txt" hidden />
+      </div>
+
+      <div class="divider"><span>or import from Moxfield</span></div>
+
+      <div class="moxfield-row">
+        <input type="text" id="moxfield-url" placeholder="https://moxfield.com/decks/…" />
+        <button id="moxfield-import-btn" class="btn-import">Import</button>
+      </div>
+      <div id="moxfield-status" class="moxfield-status hidden"></div>
+
+      <div class="divider"><span>or paste your decklist</span></div>
+
+      <textarea id="paste-input" placeholder="1 Atraxa, Praetor's Voice&#10;1 Sol Ring&#10;1 Command Tower&#10;...&#10;&#10;Format: [qty] [card name] — one per line"></textarea>
+
+      <div class="options-row">
+        <div class="option-group">
+          <label for="commander-input">Commander (optional override)</label>
+          <input type="text" id="commander-input" placeholder="e.g. Atraxa, Praetor's Voice" />
+        </div>
+        <div class="option-group">
+          <label for="bracket-select">Intended Bracket</label>
+          <select id="bracket-select">
+            <option value="">Auto-detect</option>
+            <option value="1">1 — Exhibition</option>
+            <option value="2">2 — Core</option>
+            <option value="3">3 — Upgraded</option>
+            <option value="4">4 — Optimized</option>
+            <option value="5">5 — cEDH</option>
+          </select>
+        </div>
+        <div class="option-group">
+          <label for="budget-tier-select">Budget Target</label>
+          <select id="budget-tier-select">
+            <option value="">No limit</option>
+            <option value="budget">Budget — up to $5/card</option>
+            <option value="moderate">Moderate — up to $15/card</option>
+            <option value="upgraded">Upgraded — up to $30/card</option>
+            <option value="premium">Premium — up to $60/card</option>
+          </select>
+        </div>
+        <div class="option-group">
+          <label for="ai-provider-select">Advisor Provider</label>
+          <select id="ai-provider-select">
+            <option value="">Auto</option>
+            <option value="anthropic">Anthropic</option>
+            <option value="openai">OpenAI</option>
+            <option value="ollama">Ollama</option>
+          </select>
+        </div>
+        <div class="option-group">
+          <label for="ai-model-input">Advisor Model (optional)</label>
+          <input type="text" id="ai-model-input" placeholder="Use server default" />
+        </div>
+        <div class="option-group">
+          <label class="checkbox-label">
+            <input type="checkbox" id="skip-ai-check" />
+            Skip AI review (faster)
+          </label>
+        </div>
+      </div>
+
+      <button id="submit-btn" class="btn-primary" disabled>Analyze Deck</button>
+    </section>
+
+    <!-- Loading State -->
+    <section id="loading-panel" class="panel hidden">
+      <div class="spinner"></div>
+      <p id="loading-msg">Analyzing your deck…</p>
+    </section>
+
+    <!-- Results Panel -->
+    <section id="results-panel" class="hidden">
+
+      <!-- Commander Header -->
+      <div id="commander-header" class="commander-header"></div>
+
+      <!-- Tab Navigation -->
+      <nav class="tab-nav">
+        <button class="tab-btn active" data-tab="overview">Overview</button>
+        <button class="tab-btn" data-tab="plan">Plan</button>
+        <button class="tab-btn" data-tab="validation">Validation</button>
+        <button class="tab-btn" data-tab="synergy">Synergy</button>
+        <button class="tab-btn" data-tab="bracket">Bracket</button>
+        <button class="tab-btn" data-tab="ai">Advisor</button>
+        <button class="tab-btn" data-tab="cards">Card List</button>
+      </nav>
+
+      <!-- Overview Tab -->
+      <div id="tab-overview" class="tab-content active">
+        <div class="grid-3">
+          <div class="stat-card">
+            <div class="stat-label">Total Cards</div>
+            <div class="stat-value" id="stat-count">—</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">Avg Mana Value</div>
+            <div class="stat-value" id="stat-cmc">—</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">Color Identity</div>
+            <div class="stat-value" id="stat-colors">—</div>
+          </div>
+        </div>
+
+        <div class="grid-2">
+          <div class="panel-inner">
+            <h3>Mana Curve</h3>
+            <div id="mana-curve-chart" class="bar-chart"></div>
+          </div>
+          <div class="panel-inner">
+            <h3>Card Type Breakdown</h3>
+            <div id="type-chart" class="donut-wrap">
+              <canvas id="type-canvas" width="220" height="220"></canvas>
+              <div id="type-legend" class="legend"></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="panel-inner">
+          <h3>Role Breakdown</h3>
+          <div id="role-bars" class="role-bars"></div>
+        </div>
+
+        <div class="panel-inner" id="warnings-panel" style="display:none">
+          <h3>&#9888; Deck Warnings</h3>
+          <ul id="warnings-list" class="warn-list"></ul>
+        </div>
+      </div>
+
+      <!-- Plan Tab -->
+      <div id="tab-plan" class="tab-content hidden">
+
+        <div class="grid-2" style="margin-bottom:16px">
+          <div class="panel-inner">
+            <h3>Commander Role</h3>
+            <div id="plan-cmd-roles" class="tag-cloud" style="margin-bottom:10px"></div>
+            <p id="plan-focus-advice" class="plan-advice"></p>
+            <div id="plan-focus-cards" class="tag-cloud" style="margin-top:8px"></div>
+          </div>
+          <div class="panel-inner">
+            <h3>Path to Victory</h3>
+            <div id="plan-ptv"></div>
+          </div>
+        </div>
+
+        <div class="panel-inner" style="margin-bottom:16px">
+          <h3>Framework Coverage</h3>
+          <p class="plan-framework-note">Target: Lands 38 · Card Advantage 12 · Ramp 12 · Removal 12 · Mass Disruption 6 · Plan Cards 30<br>
+          <span style="color:var(--text3);font-size:.78rem">Cards can fill multiple categories — overlap between 8–10 cards is intentional and compresses your 110 raw-target slots into 100.</span></p>
+          <div id="plan-coverage" class="coverage-grid"></div>
+        </div>
+
+        <div class="grid-2" style="margin-bottom:16px">
+          <div class="panel-inner">
+            <h3>CMC Curve vs Target</h3>
+            <div id="plan-curve-chart" class="dual-bar-chart"></div>
+            <div id="plan-curve-notes" class="plan-notes-list"></div>
+          </div>
+          <div class="panel-inner">
+            <h3>5–7 Turn Playtest Simulation</h3>
+            <div id="plan-playtest-table" class="playtest-table-wrap"></div>
+            <div id="plan-playtest-notes" class="plan-notes-list" style="margin-top:10px"></div>
+          </div>
+        </div>
+
+        <div class="grid-2" style="margin-bottom:16px">
+          <div class="panel-inner">
+            <h3>Mulligan Guide</h3>
+            <div id="plan-mulligan"></div>
+          </div>
+          <div class="panel-inner">
+            <h3>Sequencing Guide</h3>
+            <div id="plan-sequencing" class="sequence-list"></div>
+          </div>
+        </div>
+
+        <div class="panel-inner">
+          <h3>Card Role Map <span style="color:var(--text3);font-weight:400;font-size:.78rem">(overlap cards highlighted)</span></h3>
+          <div class="card-filter-row" style="margin-bottom:10px">
+            <input type="text" id="role-card-filter" placeholder="Filter cards…" />
+            <select id="role-cat-filter">
+              <option value="">All Categories</option>
+              <option value="Lands">Lands</option>
+              <option value="Card Advantage">Card Advantage</option>
+              <option value="Ramp">Ramp</option>
+              <option value="Removal">Removal</option>
+              <option value="Mass Disruption">Mass Disruption</option>
+              <option value="Plan Cards">Plan Cards</option>
+            </select>
+          </div>
+          <div id="card-role-table-wrap">
+            <table id="card-role-table">
+              <thead>
+                <tr>
+                  <th data-sort="name">Card</th>
+                  <th data-sort="cmc">CMC</th>
+                  <th data-sort="roles">Categories</th>
+                  <th data-sort="plan_subcategory">Plan Role</th>
+                  <th data-sort="is_overlap">Overlap</th>
+                </tr>
+              </thead>
+              <tbody id="card-role-tbody"></tbody>
+            </table>
+          </div>
+        </div>
+
+      </div>
+
+      <!-- Validation Tab -->
+      <div id="tab-validation" class="tab-content hidden">
+        <div id="validation-status" class="validation-status"></div>
+        <div class="grid-2">
+          <div class="panel-inner">
+            <h3>&#10006; Errors</h3>
+            <ul id="error-list" class="issue-list error-list"></ul>
+          </div>
+          <div class="panel-inner">
+            <h3>&#9888; Warnings</h3>
+            <ul id="warning-list" class="issue-list warn-list"></ul>
+          </div>
+        </div>
+      </div>
+
+      <!-- Synergy Tab -->
+      <div id="tab-synergy" class="tab-content hidden">
+        <div id="synergy-clusters" class="cluster-grid"></div>
+        <div class="panel-inner" id="staples-panel">
+          <h3>Suggested Staples You Might Be Missing</h3>
+          <div id="missing-staples" class="tag-cloud"></div>
+        </div>
+      </div>
+
+      <!-- Bracket Tab -->
+      <div id="tab-bracket" class="tab-content hidden">
+        <div id="bracket-display" class="bracket-display"></div>
+        <div class="panel-inner">
+          <h3>Game Changer Cards in Your Deck</h3>
+          <div id="gc-list" class="tag-cloud"></div>
+        </div>
+      </div>
+
+      <!-- Advisor Tab -->
+      <div id="tab-ai" class="tab-content hidden">
+        <div id="ai-content" class="ai-panel"></div>
+      </div>
+
+      <!-- Card List Tab -->
+      <div id="tab-cards" class="tab-content hidden">
+        <div class="card-filter-row">
+          <input type="text" id="card-filter" placeholder="Filter cards…" />
+          <select id="type-filter">
+            <option value="">All Types</option>
+            <option value="Creature">Creatures</option>
+            <option value="Instant">Instants</option>
+            <option value="Sorcery">Sorceries</option>
+            <option value="Artifact">Artifacts</option>
+            <option value="Enchantment">Enchantments</option>
+            <option value="Land">Lands</option>
+            <option value="Planeswalker">Planeswalkers</option>
+          </select>
+        </div>
+        <div id="card-table-wrap">
+          <table id="card-table">
+            <thead>
+              <tr>
+                <th data-sort="quantity">Qty</th>
+                <th data-sort="name">Name</th>
+                <th data-sort="type_line">Type</th>
+                <th data-sort="cmc">MV</th>
+                <th>CI</th>
+                <th>P/T</th>
+                <th data-sort="rarity">Rarity</th>
+                <th data-sort="game_changer">GC</th>
+              </tr>
+            </thead>
+            <tbody id="card-tbody"></tbody>
+          </table>
+        </div>
+      </div>
+
+    </section>
+  </main>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

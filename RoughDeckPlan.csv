@@ -1,0 +1,20 @@
+﻿Card Type,Number,Reasoning / Variance
+Lands,38,"R: with 7 draw, and mulligans, allows you to hit land drops for the first 6 turns consistently
+
+V: Can remove amount of lands with consistent mana dorks or ramp to hit consistent land drops for turn 6 (minimum)"
+Card Advantage,12,"Spending 1 card to get 1+n cards
+
+R: This will get you your synergy and engine pieces
+
+V: Do not go lower than this, you should always hit this"
+Ramp,12,R: 10 for the average deck. Ramp when you’ve missed your land drop is not ramp
+Removal / Targeted Disruption,12,R: 1 card to remove 1 other card from another player. This will stop other players from doing their things
+Mass Disruption,6,"R: Not just board wipes (2), affects many things. Variance in ‘what’ it deals with is important here.
+"
+"""Plan"" Cards",30,"“what is the goal” getting your deck to do what you want it to do. 
+
+Enablers: cards that allow the plan to work, engine pieces.
+
+Payoffs: benefit from the plan happening. Reward from the plan happening, will have your wincons
+
+Enhancers: Multipliers, make the plan better, but don’t contribute to the payoff directly"

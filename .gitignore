@@ -1,0 +1,46 @@
+# ── Environment & secrets ─────────────────────────────────────────────────────
+.env
+
+# ── Python ────────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# ── Virtual environments ──────────────────────────────────────────────────────
+venv/
+.venv/
+env/
+.env/
+ENV/
+
+# ── Scryfall bulk data (large — download via the UI) ──────────────────────────
+Scryfall src/
+
+# ── Generated cache files (rebuilt locally by build_index.py) ────────────────
+cache/card_index.json
+cache/otag_index.json
+cache/download_progress.json
+
+# ── Review results ────────────────────────────────────────────────────────────
+results/*.json
+
+# ── IDE & editor ──────────────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# ── Claude / AI tool config ───────────────────────────────────────────────────
+.claude/
+.agents/
+.codex/
