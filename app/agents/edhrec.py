@@ -26,6 +26,8 @@ _BASIC_LAND_NAMES = frozenset({
     "snow-covered mountain", "snow-covered forest", "wastes",
 })
 
+_CARD_FACE_SPLIT_RE = re.compile(r"\s*//\s*")
+
 
 def _coerce_price(value) -> Optional[float]:
     """Convert loose EDHREC price values into a float."""
@@ -386,6 +388,36 @@ def _creativity_label(score: int) -> str:
     return "Brewer"
 
 
+def _creativity_compare_key(name: str) -> str:
+    """
+    Canonical comparison key for EDHREC average-deck diffs.
+    Scryfall may display DFCs as "Front // Back" while EDHREC average decks may
+    list only "Front". Use the local lookup identity first, then fall back to
+    the front face so both forms compare as the same card.
+    """
+    raw = (name or "").strip()
+    if not raw:
+        return ""
+
+    card = lookup(raw)
+    if card and card.get("name"):
+        canonical = card["name"]
+        if " // " in canonical:
+            canonical = canonical.split(" // ", 1)[0]
+        return _normalize_name(canonical)
+
+    front = _CARD_FACE_SPLIT_RE.split(raw, maxsplit=1)[0].strip()
+    return _normalize_name(front or raw)
+
+
+def _lookup_creativity_card(display: str) -> dict:
+    card = lookup(display)
+    if card:
+        return card
+    front = _CARD_FACE_SPLIT_RE.split(display or "", maxsplit=1)[0].strip()
+    return lookup(front) or {}
+
+
 def compute_creativity(user_entries: list, average_card_names: list[str]) -> dict:
     """
     Diff user's deck vs EDHREC average deck and return a creativity payload.
@@ -395,13 +427,13 @@ def compute_creativity(user_entries: list, average_card_names: list[str]) -> dic
 
     user_norm: dict[str, str] = {}
     for e in user_eligible:
-        norm = _normalize_name(e.name or e.raw_name or "")
+        norm = _creativity_compare_key(e.name or e.raw_name or "")
         if norm:
             user_norm[norm] = e.name or e.raw_name
 
     avg_norm: dict[str, str] = {}
     for name in average_card_names:
-        n = _normalize_name(name)
+        n = _creativity_compare_key(name)
         if n and n not in _BASIC_LAND_NAMES:
             avg_norm[n] = name
 
@@ -418,7 +450,7 @@ def compute_creativity(user_entries: list, average_card_names: list[str]) -> dic
         result = []
         for norm in sorted(norms):
             display = norm_to_display[norm]
-            cd = lookup(display) or {}
+            cd = _lookup_creativity_card(display)
             tl = cd.get("type_line", "")
             txt = cd.get("oracle_text", "")
             proxy = SimpleNamespace(

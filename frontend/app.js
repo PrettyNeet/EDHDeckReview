@@ -4,6 +4,8 @@
 let currentAnalysis = null;
 let allCards = [];
 let _targetCommanderRoles = [];
+let _commanderRoleCatalog = { themes: [], typals: [] };
+let _commanderRoleByName = new Map();
 
 // Per-table sort state (mutated in place by initTableSort)
 const _cardSort       = { col: 'name',    dir: 1  };
@@ -99,6 +101,40 @@ function escapeHtml(value) {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#39;');
+}
+
+function normalizeRoleKey(role) {
+  return String(role || '').trim().toLowerCase();
+}
+
+function rebuildCommanderRoleIndex() {
+  _commanderRoleByName = new Map();
+  [...(_commanderRoleCatalog.themes || []), ...(_commanderRoleCatalog.typals || [])].forEach(role => {
+    _commanderRoleByName.set(normalizeRoleKey(role.name), role);
+    (role.aliases || []).forEach(alias => _commanderRoleByName.set(normalizeRoleKey(alias), role));
+  });
+}
+
+function getCommanderRoleMeta(roleName) {
+  return _commanderRoleByName.get(normalizeRoleKey(roleName)) || null;
+}
+
+async function loadCommanderRoleCatalog() {
+  try {
+    const r = await fetch('/api/commander-roles');
+    if (!r.ok) return;
+    const data = await r.json();
+    _commanderRoleCatalog = {
+      themes: data.themes || [],
+      typals: data.typals || [],
+    };
+    rebuildCommanderRoleIndex();
+    if (currentAnalysis && !document.getElementById('results-panel').classList.contains('hidden')) {
+      renderPlan(currentAnalysis);
+    }
+  } catch {
+    // Role descriptions are progressive enhancement; analysis still works without them.
+  }
 }
 
 function getCardUrl(name, fallbackUrl = '') {
@@ -341,7 +377,51 @@ function getActiveBracketValue() {
 }
 
 function getTargetCommanderRoles() {
-  return [...new Set(_targetCommanderRoles.map(role => role.trim()).filter(Boolean))];
+  const seen = new Set();
+  return _targetCommanderRoles
+    .map(role => canonicalizeCommanderRole(role))
+    .filter(role => {
+      if (!role) return false;
+      const key = normalizeRoleKey(role);
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+}
+
+function canonicalizeCommanderRole(role) {
+  const meta = getCommanderRoleMeta(role);
+  return meta ? meta.name : role.trim();
+}
+
+function renderCommanderRoleOptions() {
+  const themes = _commanderRoleCatalog.themes || [];
+  const typals = _commanderRoleCatalog.typals || [];
+  if (!themes.length && !typals.length) {
+    return `
+      <option value="Tokens">Tokens</option>
+      <option value="+1/+1 Counters">+1/+1 Counters</option>
+      <option value="Artifacts">Artifacts</option>
+      <option value="Spellslinger">Spellslinger</option>
+      <option value="Aristocrats">Aristocrats</option>
+      <option value="Dragons">Dragons</option>
+    `;
+  }
+  const themeOptions = themes.map(role =>
+    `<option value="${escapeHtml(role.name)}">${escapeHtml(role.name)} · ${Number(role.deck_count || 0).toLocaleString()} decks</option>`
+  ).join('');
+  const typalOptions = typals.map(role =>
+    `<option value="${escapeHtml(role.name)}">${escapeHtml(role.name)} · ${Number(role.deck_count || 0).toLocaleString()} decks</option>`
+  ).join('');
+  return `
+    <optgroup label="EDHREC Themes">${themeOptions}</optgroup>
+    <optgroup label="Typal Decks">${typalOptions}</optgroup>
+  `;
+}
+
+function renderCommanderRoleDatalistOptions() {
+  const roles = [...(_commanderRoleCatalog.themes || []), ...(_commanderRoleCatalog.typals || [])];
+  return roles.map(role => `<option value="${escapeHtml(role.name)}"></option>`).join('');
 }
 
 function renderTargetRoleTags() {
@@ -350,12 +430,21 @@ function renderTargetRoleTags() {
 
   const roles = getTargetCommanderRoles();
   el.innerHTML = roles.length
-    ? roles.map((role, index) => `
-        <span class="editable-role-tag">
-          ${escapeHtml(role)}
-          <button type="button" class="role-remove-btn" data-role-index="${index}" aria-label="Remove ${escapeHtml(role)}">&times;</button>
-        </span>
-      `).join('')
+    ? roles.map((role, index) => {
+        const meta = getCommanderRoleMeta(role);
+        const kind = meta?.kind === 'typal' ? 'Typal' : (meta?.kind === 'theme' ? 'Theme' : 'Custom');
+        const description = meta?.description || `Builds around ${role} synergies as the deck's main plan.`;
+        return `
+        <div class="editable-role-tag">
+          <div class="role-tag-main">
+            <span>${escapeHtml(role)}</span>
+            <span class="role-kind">${kind}</span>
+            <button type="button" class="role-remove-btn" data-role-index="${index}" aria-label="Remove ${escapeHtml(role)}">&times;</button>
+          </div>
+          <div class="role-tag-description">${escapeHtml(description)}</div>
+        </div>
+      `;
+      }).join('')
     : '<span style="color:var(--text3);font-size:.85rem">No target roles set.</span>';
 
   el.querySelectorAll('.role-remove-btn').forEach(btn => {
@@ -368,23 +457,30 @@ function renderTargetRoleTags() {
 
 function addTargetCommanderRole() {
   const input = document.getElementById('target-role-input');
-  if (!input) return;
-  const role = input.value.trim();
+  const select = document.getElementById('target-role-select');
+  if (!input && !select) return;
+  const role = canonicalizeCommanderRole((input?.value || '').trim() || (select?.value || '').trim());
   if (!role) return;
 
   const exists = _targetCommanderRoles.some(existing => existing.toLowerCase() === role.toLowerCase());
   if (!exists) _targetCommanderRoles.push(role);
-  input.value = '';
+  if (input) input.value = '';
   renderTargetRoleTags();
 }
 
 function bindTargetControls() {
   const addBtn = document.getElementById('target-role-add-btn');
   const input = document.getElementById('target-role-input');
+  const select = document.getElementById('target-role-select');
   const rerunBtn = document.getElementById('target-analysis-btn');
   const targetBracket = document.getElementById('target-bracket-select');
 
   if (addBtn) addBtn.addEventListener('click', addTargetCommanderRole);
+  if (select) {
+    select.addEventListener('change', () => {
+      if (input && select.value) input.value = select.value;
+    });
+  }
   if (input) {
     input.addEventListener('keydown', event => {
       if (event.key === 'Enter') {
@@ -903,40 +999,46 @@ function renderPlan(data) {
   // ── Commander Role ───────────────────────────────────────────────────
   const roles = plan.commander_roles || [];
   const detectedRoles = plan.detected_commander_roles || [];
+  const detectedMatches = plan.detected_commander_role_matches || [];
   const roleSource = plan.commander_roles_source || 'detected';
   _targetCommanderRoles = [...roles.filter(Boolean)];
   const plannedBracket = data.intended_bracket || document.getElementById('bracket-select').value || '';
   document.getElementById('bracket-select').value = plannedBracket;
+  const detectedHtml = detectedMatches.length
+    ? `<div class="detected-role-list">${detectedMatches.map(match => {
+        const evidence = (match.evidence || []).join('; ');
+        const kind = match.kind === 'typal' ? 'Typal' : 'Theme';
+        const confidence = match.confidence ? `${match.confidence} confidence` : 'detected';
+        return `
+          <div class="detected-role-item">
+            <div class="detected-role-head">
+              <span>${escapeHtml(match.name)}</span>
+              <span>${escapeHtml(kind)} · ${escapeHtml(confidence)}</span>
+            </div>
+            <div class="detected-role-desc">${escapeHtml(match.description || '')}</div>
+            ${evidence ? `<div class="detected-role-evidence">${escapeHtml(evidence)}</div>` : ''}
+          </div>
+        `;
+      }).join('')}</div>`
+    : '';
   document.getElementById('plan-cmd-roles').innerHTML = `
     <div class="target-editor">
       <div class="target-editor-note">
         Current target roles are used for focus advice, sequencing, and Advisor recommendations.
         ${roleSource === 'user' ? `Detected roles: ${escapeHtml(detectedRoles.join(', ') || 'Unknown')}` : 'These started from detected roles.'}
       </div>
+      ${detectedHtml}
       <div id="target-role-tags" class="editable-role-list"></div>
       <div class="target-control-row">
+        <select id="target-role-select" aria-label="Known commander role">
+          <option value="">Browse EDHREC themes and typals</option>
+          ${renderCommanderRoleOptions()}
+        </select>
         <input type="text" id="target-role-input" list="commander-role-options" placeholder="Add target role, e.g. Tokens" />
         <button type="button" id="target-role-add-btn" class="btn-secondary">Add Role</button>
       </div>
       <datalist id="commander-role-options">
-        <option value="Tokens"></option>
-        <option value="+1/+1 Counters"></option>
-        <option value="Artifacts"></option>
-        <option value="Combo"></option>
-        <option value="Lifegain"></option>
-        <option value="Aggro"></option>
-        <option value="Spellslinger"></option>
-        <option value="Aristocrats"></option>
-        <option value="Reanimator"></option>
-        <option value="Lands Matter"></option>
-        <option value="Treasure"></option>
-        <option value="Equipment"></option>
-        <option value="Control"></option>
-        <option value="Enchantress"></option>
-        <option value="Voltron"></option>
-        <option value="Blink"></option>
-        <option value="Graveyard"></option>
-        <option value="Stax"></option>
+        ${renderCommanderRoleDatalistOptions()}
       </datalist>
       <div class="target-control-row">
         <label for="target-bracket-select">Planned Bracket</label>
@@ -1122,18 +1224,27 @@ function renderPlan(data) {
 let _allCardRoles = [];
 let _allCardsForRoles = [];
 let _cmcMapCache = {};
+let _cardRoleCurrentView = [];
+let _cardRoleCardMap = new Map();
 
 function renderCardRoleTable(cardRoles, cards) {
   _allCardRoles = cardRoles;
+  _allCardsForRoles = cards || [];
+  _cardRoleCardMap = new Map();
 
   // Build a CMC lookup from the main cards array
   _cmcMapCache = {};
-  cards.forEach(c => { if (c.name) _cmcMapCache[c.name] = c.cmc; });
+  _allCardsForRoles.forEach(c => {
+    const name = c.name || c.raw_name;
+    if (!name) return;
+    _cmcMapCache[name] = c.cmc;
+    _cardRoleCardMap.set(name.toLowerCase(), c);
+  });
 
   filterCardRoleTable(_cmcMapCache);
 }
 
-function filterCardRoleTable(cmcMap) {
+function getFilteredCardRoleRows(cmcMap = {}) {
   const query = (document.getElementById('role-card-filter').value || '').toLowerCase();
   const catFilter = document.getElementById('role-cat-filter').value;
 
@@ -1151,6 +1262,13 @@ function filterCardRoleTable(cmcMap) {
     }),
     _roleSort.col, _roleSort.dir
   );
+
+  return filtered;
+}
+
+function filterCardRoleTable(cmcMap) {
+  const filtered = getFilteredCardRoleRows(cmcMap);
+  _cardRoleCurrentView = filtered;
 
   const tbody = document.getElementById('card-role-tbody');
   tbody.innerHTML = filtered.map(cr => {
@@ -1177,6 +1295,61 @@ function filterCardRoleTable(cmcMap) {
 
 document.getElementById('role-card-filter').addEventListener('input', () => filterCardRoleTable({}));
 document.getElementById('role-cat-filter').addEventListener('change', () => filterCardRoleTable({}));
+
+function decklistLineForRoleRow(row) {
+  const card = _cardRoleCardMap.get(String(row.name || '').toLowerCase()) || {};
+  const name = card.name || row.name;
+  const quantity = Number.isFinite(Number(card.quantity)) ? Number(card.quantity) : 1;
+  return {
+    isCommander: Boolean(card.is_commander),
+    line: `${quantity} ${name}`,
+    commanderLine: `Commander: ${name}`,
+  };
+}
+
+async function copyCardRoleView() {
+  const rows = _cardRoleCurrentView.length ? _cardRoleCurrentView : getFilteredCardRoleRows(_cmcMapCache);
+  if (!rows.length) {
+    alert('No cards match the current Card Role Map filters.');
+    return;
+  }
+
+  const lines = [];
+  rows.map(decklistLineForRoleRow).forEach(item => {
+    if (item.isCommander) lines.push(item.commanderLine);
+    lines.push(item.line);
+  });
+
+  const text = `${lines.join('\n')}\n`;
+  const btn = document.getElementById('role-export-btn');
+  const originalText = btn.textContent;
+
+  try {
+    await navigator.clipboard.writeText(text);
+    btn.textContent = 'Copied';
+    setTimeout(() => { btn.textContent = originalText; }, 1400);
+  } catch {
+    const textarea = document.createElement('textarea');
+    textarea.value = text;
+    textarea.setAttribute('readonly', '');
+    textarea.style.position = 'fixed';
+    textarea.style.left = '-9999px';
+    document.body.appendChild(textarea);
+    textarea.select();
+    const copied = document.execCommand('copy');
+    textarea.remove();
+
+    if (!copied) {
+      alert('Could not copy the current Card Role Map view to clipboard.');
+      return;
+    }
+
+    btn.textContent = 'Copied';
+    setTimeout(() => { btn.textContent = originalText; }, 1400);
+  }
+}
+
+document.getElementById('role-export-btn').addEventListener('click', copyCardRoleView);
 
 // ── Validation Tab ────────────────────────────────────────────────────────────
 function renderValidation(data) {
@@ -1212,7 +1385,7 @@ function renderSynergy(data) {
     ? clusters.map(c => `
       <div class="cluster-card ${c.strength}">
         <div class="cluster-name">
-          ${c.name}
+          ${c.name} - ${c.cards.length} cards
           <span class="strength-badge strength-${c.strength}">${c.strength}</span>
         </div>
         <div class="cluster-desc">${c.description}</div>
@@ -1622,6 +1795,7 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
 
 // ── Init ──────────────────────────────────────────────────────────────────────
 checkIndexStatus();
+loadCommanderRoleCatalog();
 
 // Sortable static tables
 const _cardTableEl = document.getElementById('card-table');

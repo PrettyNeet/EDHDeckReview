@@ -35,6 +35,7 @@ from typing import Optional
 
 from app.models.card import CardEntry
 from app.agents.card_lookup import lookup_otags
+from app.agents.role_catalog import get_role_catalog_entries, get_role_metadata
 
 # ─── Category targets ─────────────────────────────────────────────────────────
 
@@ -316,6 +317,32 @@ COMMANDER_ROLES = [
     ("Utility / Value", re.compile(r"draw.*card|create.*token|destroy target|exile target|search your library", re.IGNORECASE)),
 ]
 
+BROAD_COMMANDER_ROLES = {
+    "Aggro", "Midrange", "Good Stuff", "Utility / Value", "Triggered Abilities",
+    "Keywords", "Power", "Rock", "Unnatural",
+}
+
+ROLE_SPECIFICITY_BOOST = {
+    "Equipment": 12,
+    "Auras": 12,
+    "Enchantress": 10,
+    "Artifacts": 8,
+    "Spellslinger": 8,
+    "Aristocrats": 8,
+    "Reanimator": 8,
+    "Lands Matter": 8,
+    "Landfall": 8,
+    "Treasure": 8,
+    "Voltron": 8,
+    "Blink": 8,
+    "Mill": 8,
+    "Stax": 8,
+    "Storm": 8,
+    "Combo": 8,
+}
+
+COMMANDER_ROLE_PATTERNS = {name: pattern for name, pattern in COMMANDER_ROLES}
+
 
 # ─── Role-specific card suggestions (name + required color identity) ──────────
 # ci: [] means colorless — fits ANY commander's color identity.
@@ -517,18 +544,275 @@ def _scryfall_url(name: str) -> str:
     return "https://scryfall.com/search?q=!" + urllib.parse.quote(f'"{name}"')
 
 
-def detect_commander_role(commander: CardEntry) -> list[str]:
-    """Return the 1-3 most relevant roles the commander plays."""
-    if not commander.found:
-        return ["Unknown"]
-    txt = commander.oracle_text or ""
-    roles = []
-    for role_name, pattern in COMMANDER_ROLES:
-        if pattern.search(txt):
-            roles.append(role_name)
-    if not roles and commander.is_creature and commander.power and commander.power.isdigit() and int(commander.power) >= 5:
-        roles.append("Aggro")
-    return roles[:3] if roles else ["Utility / Value"]
+def _role_description(role: str) -> str:
+    meta = get_role_metadata(role)
+    if meta:
+        return meta["description"]
+    return f"Builds around {role} synergies as the deck's main plan."
+
+
+def _confidence(score: float) -> str:
+    if score >= 70:
+        return "high"
+    if score >= 38:
+        return "medium"
+    return "low"
+
+
+def _safe_power(entry: CardEntry) -> int:
+    try:
+        return int(entry.power or 0)
+    except ValueError:
+        return 0
+
+
+def _theme_text(entry: CardEntry) -> str:
+    return " ".join(
+        part for part in [
+            entry.name or "",
+            entry.type_line or "",
+            entry.oracle_text or "",
+            " ".join(entry.keywords or []),
+        ]
+        if part
+    )
+
+
+def _oracle_text(entry: CardEntry | None) -> str:
+    if not entry:
+        return ""
+    return " ".join(part for part in [entry.oracle_text or "", " ".join(entry.keywords or [])] if part)
+
+
+def _creature_subtypes(entry: CardEntry) -> list[str]:
+    if not entry.is_creature or not entry.type_line:
+        return []
+    if "—" not in entry.type_line:
+        return []
+    subtype_text = entry.type_line.split("—", 1)[1]
+    return [part.strip() for part in subtype_text.split() if part.strip()]
+
+
+def _singularize_type(name: str) -> str:
+    clean = name.strip()
+    lowered = clean.lower()
+    irregular = {
+        "elves": "elf",
+        "phyrexians": "phyrexian",
+        "time lords": "time lord",
+    }
+    if lowered in irregular:
+        return irregular[lowered]
+    if lowered.endswith("ies"):
+        return lowered[:-3] + "y"
+    if lowered.endswith("ses") or lowered.endswith("xes") or lowered.endswith("ches") or lowered.endswith("shes"):
+        return lowered[:-2]
+    if lowered.endswith("s"):
+        return lowered[:-1]
+    return lowered
+
+
+def _theme_deck_evidence(role: str, entries: list[CardEntry], pattern: re.Pattern | None) -> tuple[float, list[str]]:
+    non_commanders = [e for e in entries if e.found and not e.is_commander]
+    evidence: list[str] = []
+    score = 0.0
+    if not non_commanders:
+        return score, evidence
+
+    if pattern:
+        matches = [
+            e for e in non_commanders
+            if pattern.search(_theme_text(e))
+        ]
+        match_qty = sum(e.quantity for e in matches)
+        if match_qty:
+            score += min(32, match_qty * 2.4)
+            evidence.append(f"{match_qty} deck card(s) match {role} text")
+
+    if role in {"Artifacts", "Affinity"}:
+        count = sum(e.quantity for e in non_commanders if e.is_artifact)
+        if count >= 8:
+            score += min(28, count * 1.8)
+            evidence.append(f"{count} artifact card(s)")
+    elif role in {"Enchantress", "Auras", "Sagas"}:
+        count = sum(e.quantity for e in non_commanders if e.is_enchantment)
+        if count >= 8:
+            score += min(28, count * 1.8)
+            evidence.append(f"{count} enchantment card(s)")
+    elif role in {"Spellslinger", "Cantrips", "Storm", "Spell Copy"}:
+        count = sum(e.quantity for e in non_commanders if e.is_instant or e.is_sorcery)
+        if count >= 16:
+            score += min(28, count * 1.2)
+            evidence.append(f"{count} instant/sorcery card(s)")
+    elif role in {"Lands Matter", "Landfall", "Land Animation"}:
+        count = sum(e.quantity for e in non_commanders if e.is_land)
+        land_text = sum(
+            e.quantity for e in non_commanders
+            if re.search(r"landfall|land.*enters|play.*additional land|return.*land", _theme_text(e), re.IGNORECASE)
+        )
+        if count >= 38 or land_text >= 4:
+            score += min(28, max(0, count - 34) * 2 + land_text * 4)
+            evidence.append(f"{count} lands and {land_text} land-synergy card(s)")
+    elif role in {"Voltron", "Equipment"}:
+        equipment = sum(e.quantity for e in non_commanders if "Equipment" in (e.type_line or ""))
+        aura = sum(e.quantity for e in non_commanders if "Aura" in (e.type_line or ""))
+        if equipment + aura >= 6:
+            score += min(28, (equipment + aura) * 3)
+            evidence.append(f"{equipment} Equipment and {aura} Aura card(s)")
+
+    return score, evidence[:2]
+
+
+def _score_theme_roles(commander: CardEntry | None, entries: list[CardEntry]) -> list[dict]:
+    matches: list[dict] = []
+    commander_text = _oracle_text(commander) if commander and commander.found else ""
+    for catalog_entry in get_role_catalog_entries():
+        if catalog_entry.kind != "theme":
+            continue
+        pattern = COMMANDER_ROLE_PATTERNS.get(catalog_entry.name)
+        score = 0.0
+        evidence: list[str] = []
+        if pattern and commander_text and pattern.search(commander_text):
+            score += 55
+            evidence.append("commander text matches")
+        deck_score, deck_evidence = _theme_deck_evidence(catalog_entry.name, entries, pattern)
+        score += deck_score
+        evidence.extend(deck_evidence)
+        if catalog_entry.name in ROLE_SPECIFICITY_BOOST:
+            score += ROLE_SPECIFICITY_BOOST[catalog_entry.name]
+        if catalog_entry.name in BROAD_COMMANDER_ROLES:
+            score -= 18
+        if catalog_entry.deck_count:
+            score += min(6, catalog_entry.deck_count / 35000)
+        if score >= 18:
+            matches.append({
+                "name": catalog_entry.name,
+                "kind": catalog_entry.kind,
+                "score": round(score, 1),
+                "confidence": _confidence(score),
+                "description": catalog_entry.description,
+                "evidence": evidence[:3] or ["matched deck pattern"],
+                "deck_count": catalog_entry.deck_count,
+            })
+
+    if commander and commander.found and not matches and commander.is_creature and _safe_power(commander) >= _HIGH_POWER_THRESH:
+        meta = get_role_metadata("Aggro") or {}
+        matches.append({
+            "name": "Aggro",
+            "kind": "theme",
+            "score": 30,
+            "confidence": "low",
+            "description": meta.get("description", _role_description("Aggro")),
+            "evidence": [f"{commander.name} is a high-power creature"],
+            "deck_count": meta.get("deck_count", 0),
+        })
+    return matches
+
+
+def _score_typal_roles(commander: CardEntry | None, entries: list[CardEntry]) -> list[dict]:
+    found = [e for e in entries if e.found]
+    non_commander_creatures = [e for e in found if e.is_creature and not e.is_commander]
+    creature_total = sum(e.quantity for e in non_commander_creatures)
+    subtype_counts: Counter = Counter()
+    for entry in non_commander_creatures:
+        for subtype in _creature_subtypes(entry):
+            subtype_counts[_singularize_type(subtype)] += entry.quantity
+
+    commander_text = _oracle_text(commander) if commander and commander.found else ""
+    commander_subtypes = {
+        _singularize_type(subtype)
+        for subtype in _creature_subtypes(commander)
+    } if commander else set()
+
+    matches: list[dict] = []
+    for catalog_entry in get_role_catalog_entries():
+        if catalog_entry.kind != "typal":
+            continue
+        singular = _singularize_type(catalog_entry.name)
+        count = subtype_counts.get(singular, 0)
+        density = (count / creature_total) if creature_total else 0
+        score = 0.0
+        evidence: list[str] = []
+        if commander_text and re.search(rf"\b{re.escape(catalog_entry.name)}\b|\b{re.escape(singular)}\b", commander_text, re.IGNORECASE):
+            score += 55
+            evidence.append("commander text mentions the creature type")
+        if singular in commander_subtypes:
+            score += 8
+            evidence.append("commander has the creature type")
+        if count >= 8 and density >= 0.28:
+            score += min(48, count * 2.4 + density * 25)
+            evidence.append(f"{count} {catalog_entry.name} in the deck")
+        elif count >= 12:
+            score += min(34, count * 1.8)
+            evidence.append(f"{count} {catalog_entry.name} in the deck")
+        if catalog_entry.deck_count:
+            score += min(5, catalog_entry.deck_count / 7000)
+        if score >= 28:
+            matches.append({
+                "name": catalog_entry.name,
+                "kind": catalog_entry.kind,
+                "score": round(score, 1),
+                "confidence": _confidence(score),
+                "description": catalog_entry.description,
+                "evidence": evidence[:3],
+                "deck_count": catalog_entry.deck_count,
+            })
+    return matches
+
+
+def detect_commander_role_matches(
+    commander: CardEntry | None,
+    entries: list[CardEntry] | None = None,
+    limit: int = 5,
+) -> list[dict]:
+    """Return ranked commander/deck theme matches with evidence."""
+    if commander and not commander.found:
+        return [{
+            "name": "Unknown",
+            "kind": "theme",
+            "score": 0,
+            "confidence": "low",
+            "description": "Commander was not found in the local card index.",
+            "evidence": ["commander lookup failed"],
+            "deck_count": 0,
+        }]
+
+    pool = list(entries or ([commander] if commander else []))
+    matches = _score_theme_roles(commander, pool) + _score_typal_roles(commander, pool)
+    specific_matches = [match for match in matches if match["name"] not in BROAD_COMMANDER_ROLES]
+    if len(specific_matches) >= 3:
+        matches = specific_matches
+    matches.sort(key=lambda item: (item["score"], item.get("deck_count", 0)), reverse=True)
+
+    filtered: list[dict] = []
+    seen: set[str] = set()
+    for match in matches:
+        key = match["name"].lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        filtered.append(match)
+        if len(filtered) >= limit:
+            break
+
+    if filtered:
+        return filtered
+
+    meta = get_role_metadata("Utility / Value") or {}
+    return [{
+        "name": "Utility / Value",
+        "kind": "theme",
+        "score": 0,
+        "confidence": "low",
+        "description": meta.get("description", "Provides general value without a strongly detected theme."),
+        "evidence": ["no stronger EDHREC theme detected"],
+        "deck_count": meta.get("deck_count", 0),
+    }]
+
+
+def detect_commander_role(commander: CardEntry, entries: list[CardEntry] | None = None) -> list[str]:
+    """Return the most relevant commander/deck role names."""
+    return [match["name"] for match in detect_commander_role_matches(commander, entries)]
 
 
 def commander_focus_advice(roles: list[str], color_identity: list[str] | None = None) -> dict:
@@ -1147,10 +1431,36 @@ def analyze_plan(
 
     # Plan card sub-classification
     commanders = [e for e in found if e.is_commander]
-    detected_commander_roles = detect_commander_role(commanders[0]) if commanders else ["Unknown"]
+    detected_role_matches = detect_commander_role_matches(commanders[0], found) if commanders else [{
+        "name": "Unknown",
+        "kind": "theme",
+        "score": 0,
+        "confidence": "low",
+        "description": "No commander was detected for this deck.",
+        "evidence": ["no commander found"],
+        "deck_count": 0,
+    }]
+    detected_commander_roles = [match["name"] for match in detected_role_matches]
     has_role_override = commander_roles_override is not None
     cleaned_override = [r.strip() for r in (commander_roles_override or []) if r and r.strip()]
     commander_roles = cleaned_override if has_role_override else detected_commander_roles
+    commander_role_details = []
+    detected_by_name = {match["name"].lower(): match for match in detected_role_matches}
+    for role in commander_roles:
+        detected_match = detected_by_name.get(role.lower())
+        if detected_match:
+            commander_role_details.append(detected_match)
+            continue
+        meta = get_role_metadata(role)
+        commander_role_details.append({
+            "name": role,
+            "kind": meta.get("kind", "custom") if meta else "custom",
+            "score": None,
+            "confidence": None,
+            "description": meta.get("description", _role_description(role)) if meta else _role_description(role),
+            "evidence": ["user-selected target role"] if has_role_override else [],
+            "deck_count": meta.get("deck_count", 0) if meta else 0,
+        })
     focus_advice = commander_focus_advice(commander_roles, color_identity=color_identity)
 
     plan_subcategories: dict[str, str] = {}
@@ -1191,6 +1501,8 @@ def analyze_plan(
     return {
         "commander_roles": commander_roles,
         "detected_commander_roles": detected_commander_roles,
+        "commander_role_details": commander_role_details,
+        "detected_commander_role_matches": detected_role_matches,
         "commander_roles_source": "user" if has_role_override else "detected",
         "commander_focus_advice": focus_advice,
         "coverage": coverage,

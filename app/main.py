@@ -42,6 +42,7 @@ from app.agents import plan_analyzer
 from app.agents import ai_advisor
 from app.agents import edhrec as edhrec_agent
 from app.agents import moxfield as moxfield_agent
+from app.agents.role_catalog import get_role_catalog
 
 CACHE_DIR = ROOT / "cache"
 RESULTS_DIR = ROOT / "results"
@@ -129,6 +130,12 @@ async def serve_index():
     if index_file.exists():
         return HTMLResponse(index_file.read_text(encoding="utf-8"))
     return HTMLResponse("<h1>MTG Deck Review</h1><p>Frontend not found.</p>")
+
+
+@app.get("/api/commander-roles")
+async def commander_roles_catalog():
+    """Return EDHREC-derived theme and typal role metadata for the Plan tab."""
+    return JSONResponse(content=get_role_catalog())
 
 
 if FRONTEND_DIR.exists():
