@@ -57,6 +57,7 @@ Primary entrypoint: [app/main.py](../app/main.py)
 - `plan_analyzer` is the largest logic module and the main hotspot for deckbuilding heuristics.
 - Commander role detection uses EDHREC theme/typal CSV catalogs (`docs/edhdeckthemes.csv`, `docs/edhdecktypals.csv`) plus commander/deck evidence to rank target roles. The Plan tab also gets descriptions and grouped Theme/Typal options from `/api/commander-roles`.
 - Plan tab target controls let the user edit/remove commander role tags and planned bracket, then re-run analysis. API field `commander_roles` is treated as user target roles.
+- Plan tab Card Role Map has an `Export View` control that copies the current filtered/sorted card-role table to the clipboard as parser-compatible decklist text (`Commander:` tag lines plus `qty card name` lines), matching the import format.
 - EDHREC data is non-fatal; failures are swallowed and the review still completes.
 - EDHREC recommendation rows are enriched after fetch with `plan_roles`, `scryfall_uri`, and a `tcgplayer_price` value. If EDHREC omits price data, the app falls back to cached Scryfall `prices.usd` / `prices.usd_foil`.
 - `card_lookup.build_index()` now reads either plain JSON or gzip-compressed Scryfall bulk files transparently and includes `prices` in the cached index.

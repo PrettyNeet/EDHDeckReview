@@ -383,7 +383,7 @@ Single-page app shell. All content is rendered into `<section>` elements by `app
 | `results-panel` | Container for all result tabs |
 | `commander-header` | Commander/partner names, color pips, bracket label, and enriched card details |
 | `tab-overview` | Stat cards, mana curve, type donut, role bars, warnings |
-| `tab-plan` | Framework coverage, CMC curve, playtest table, mulligan, sequencing, card role table |
+| `tab-plan` | Framework coverage, CMC curve, playtest table, mulligan, sequencing, card role table with filtered-view clipboard export |
 | `tab-validation` | Error/warning lists |
 | `tab-synergy` | Synergy cluster cards, missing staples |
 | `tab-bracket` | 5-box bracket display + GC cards |
@@ -407,6 +407,8 @@ let currentAnalysis = null;   // last API response
 let allCards = [];            // for card list filtering
 let _allCardRoles = [];       // for plan tab card role table
 let _cmcMapCache = {};        // {name → cmc} built from cards array
+let _cardRoleCurrentView = [];// current filtered/sorted Plan role rows
+let _cardRoleCardMap = new Map(); // card role name → enriched card entry
 let _edhrecMissing = [];      // EDHREC cards not in deck
 let _edhrecIncluded = [];     // EDHREC cards already in deck
 ```
@@ -430,8 +432,9 @@ const _edhrecSort = { col: 'synergy', dir: -1 };   // Advisor tab EDHREC tables
 | `renderCommanderHeader(data)` | Name/color pips/bracket label plus enriched commander and partner detail cards |
 | `renderOverview(data)` | Stat cards, mana curve bars, type donut (canvas), role bars |
 | `renderPlan(data)` | All Plan tab sections including card role table |
-| `renderCardRoleTable(cardRoles, cards)` | Populates `_allCardRoles` + `_cmcMapCache`, calls `filterCardRoleTable()` |
-| `filterCardRoleTable(cmcMap)` | Applies text/category filter + sort, renders tbody |
+| `renderCardRoleTable(cardRoles, cards)` | Populates `_allCardRoles`, `_cmcMapCache`, and `_cardRoleCardMap`, calls `filterCardRoleTable()` |
+| `filterCardRoleTable(cmcMap)` | Applies text/category filter + sort, stores `_cardRoleCurrentView`, renders tbody |
+| `copyCardRoleView()` | Copies the current Card Role Map view to the clipboard as import-compatible decklist text |
 | `renderValidation(data)` | Error/warning lists |
 | `renderSynergy(data)` | Cluster cards + missing staples |
 | `renderBracket(data)` | 5-box bracket display (1=Exhibition…5=cEDH) + reasoning + GC cards |

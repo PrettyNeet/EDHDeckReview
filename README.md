@@ -153,7 +153,7 @@ Split cards use the full double-sided name or either half:
 | Tab | Contents |
 |---|---|
 | **Overview** | Card count, average mana value, color identity, mana curve chart, type breakdown donut, role bar chart, deck warnings |
-| **Plan** | RoughDeckPlan framework analysis — editable commander role/bracket targets, coverage gauges, CMC curve vs target, path to victory, 5–7 turn playtest simulation, mulligan guide, sequencing guide, full card role map |
+| **Plan** | RoughDeckPlan framework analysis — editable commander role/bracket targets, coverage gauges, CMC curve vs target, path to victory, 5–7 turn playtest simulation, mulligan guide, sequencing guide, full card role map with filtered-view clipboard export |
 | **Validation** | Pass/fail status, full list of errors and warnings |
 | **Synergy** | Detected synergy clusters with strength ratings, missing staple suggestions |
 | **Bracket** | Visual bracket indicator (1–5), reasoning notes, list of game-changer cards |
@@ -164,7 +164,7 @@ The commander header shows enriched commander and partner card details when avai
 
 The Plan tab includes target controls for iteration. Users can add/remove commander role tags and change the planned bracket, then re-run the analysis so focus advice and Advisor suggestions aim at that target.
 
-The Plan tab also links card names in the 5–7 turn simulation notes, sequencing guide, mulligan guide, and role-map sections. The Advisor tab's EDHREC tables include `Synergy`, `Inclusion`, `Decks`, `Price`, role chips, and budget-aware filtering. Price prefers EDHREC's TCGplayer value when present and otherwise falls back to the local Scryfall index.
+The Plan tab also links card names in the 5–7 turn simulation notes, sequencing guide, mulligan guide, and role-map sections. The Card Role Map's `Export View` button copies the current filtered/sorted rows to the clipboard in the same plain-text decklist format accepted by import and paste flows, including `Commander:` tags when the commander is included in the view. The Advisor tab's EDHREC tables include `Synergy`, `Inclusion`, `Decks`, `Price`, role chips, and budget-aware filtering. Price prefers EDHREC's TCGplayer value when present and otherwise falls back to the local Scryfall index.
 
 ---
 
@@ -505,7 +505,7 @@ The raw sum is 110. With 8–10 cards filling two categories simultaneously (ove
 
 #### Multi-Role Tagging
 
-Every card is checked against all six categories and can receive multiple labels. A card like Rhystic Study gets both **Card Advantage** and **Plan Cards** (as an Enabler). Cultivate gets both **Ramp** and (depending on context) **Plan Cards**. The card role table in the Plan tab shows every card's full category membership, overlap status, and Plan sub-type.
+Every card is checked against all six categories and can receive multiple labels. A card like Rhystic Study gets both **Card Advantage** and **Plan Cards** (as an Enabler). Cultivate gets both **Ramp** and (depending on context) **Plan Cards**. The card role table in the Plan tab shows every card's full category membership, overlap status, and Plan sub-type. Its `Export View` action respects the active card search, category filter, and column sort, then copies those rows as import-compatible decklist text.
 
 #### Commander Role Detection
 
