@@ -24,11 +24,7 @@
         "cache/otag_index.json.gz",
         "cache/index_metadata.json"
       ],
-      "excludeFiles": [
-        "Scryfall src/**",
-        "results/**",
-        "tests/**"
-      ]
+      "excludeFiles": "{Scryfall src/**,results/**,tests/**}"
     }
   }
 }
