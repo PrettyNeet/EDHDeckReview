@@ -1,0 +1,20 @@
+.git
+.venv
+venv
+env
+__pycache__
+**/__pycache__
+*.pyc
+.pytest_cache
+.claude
+.agents
+.codex
+
+Scryfall src
+results
+tests
+decks
+
+cache/card_index.json
+cache/otag_index.json
+cache/download_progress.json
