@@ -55,7 +55,7 @@ Feature flags are returned through `/api/config` and enforced by the backend.
 |---|---|---|
 | `FEATURE_AI_REVIEW_ENABLED` | `false` on Vercel, `true` locally | Shows Advisor controls and allows model-backed AI review calls |
 
-When `FEATURE_AI_REVIEW_ENABLED=false`, the web UI hides Advisor provider/model controls and the Advisor tab, and the review API will not call Anthropic/OpenAI/Ollama even if a request includes `skip_ai=false`.
+When `FEATURE_AI_REVIEW_ENABLED=false`, the web UI hides only the AI provider/model controls, keeps the results Analysis tab visible for EDHREC and creativity analysis, and the review API will not call Anthropic/OpenAI/Ollama even if a request includes `skip_ai=false`.
 
 ## Scryfall cache freshness
 

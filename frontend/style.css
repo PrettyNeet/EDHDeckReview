@@ -261,6 +261,12 @@ textarea:focus { outline: none; border-color: var(--accent); }
 }
 .btn-secondary:hover { border-color: var(--accent); transform: translateY(-1px); }
 
+.results-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 12px;
+}
+
 /* ── Loading ──────────────────────────────────────────────────────────── */
 #loading-panel { text-align: center; padding: 60px; }
 .spinner {

@@ -30,6 +30,8 @@ const BUDGET_TIERS = {
   premium: { label: 'Premium', max_card_price: 60 },
   unlimited: { label: 'No Limit', max_card_price: null },
 };
+const MAX_DECKLIST_FILE_BYTES = 512 * 1024;
+const ALLOWED_DECKLIST_MIME_TYPES = new Set(['', 'text/plain', 'text/markdown', 'application/octet-stream']);
 
 async function apiFetch(url, options = {}) {
   const headers = new Headers(options.headers || {});
@@ -135,13 +137,6 @@ function applyFeatureFlags() {
   document.querySelectorAll('.ai-feature').forEach(el => {
     el.classList.toggle('hidden', !aiEnabled);
   });
-
-  if (!aiEnabled) {
-    const activeAiTab = document.querySelector('.tab-btn[data-tab="ai"].active');
-    if (activeAiTab) {
-      document.querySelector('.tab-btn[data-tab="overview"]')?.click();
-    }
-  }
 }
 
 async function loadAppConfig() {
@@ -901,14 +896,72 @@ dropZone.addEventListener('drop', e => {
 dropZone.addEventListener('click', () => fileInput.click());
 fileInput.addEventListener('change', () => { if (fileInput.files[0]) handleFile(fileInput.files[0]); });
 
+function resetDropZone() {
+  dropZone.innerHTML = `
+    <div class="drop-icon">&#128196;</div>
+    <p>Drag &amp; drop your <code>.txt</code> decklist here</p>
+    <p>or <label for="file-input" class="link-label">click to browse</label></p>
+  `;
+}
+
+function validateDeckFile(file) {
+  const name = file.name || '';
+  const ext = name.includes('.') ? name.slice(name.lastIndexOf('.')).toLowerCase() : '';
+  const type = String(file.type || '').split(';', 1)[0].toLowerCase();
+
+  if (ext !== '.txt') return 'Please upload a .txt decklist file.';
+  if (!ALLOWED_DECKLIST_MIME_TYPES.has(type)) return 'Please upload a plain text decklist file.';
+  if (file.size <= 0) return 'The selected file is empty.';
+  if (file.size > MAX_DECKLIST_FILE_BYTES) return 'Decklist files must be under 512 KB.';
+  return '';
+}
+
 function handleFile(f) {
+  const validationError = validateDeckFile(f);
+  if (validationError) {
+    selectedFile = null;
+    fileInput.value = '';
+    resetDropZone();
+    alert(validationError);
+    return;
+  }
+
   selectedFile = f;
   dropZone.innerHTML = `<div class="drop-icon">✅</div><p><strong>${f.name}</strong> selected (${(f.size/1024).toFixed(1)} KB)</p>`;
   // Also read text into paste area for preview
   const reader = new FileReader();
-  reader.onload = e => { document.getElementById('paste-input').value = e.target.result; };
+  reader.onload = e => {
+    const value = String(e.target.result || '');
+    if (value.includes('\u0000')) {
+      selectedFile = null;
+      fileInput.value = '';
+      resetDropZone();
+      alert('The selected file does not look like plain text.');
+      return;
+    }
+    document.getElementById('paste-input').value = value;
+  };
+  reader.onerror = () => {
+    selectedFile = null;
+    fileInput.value = '';
+    resetDropZone();
+    alert('Could not read the selected file.');
+  };
   reader.readAsText(f);
 }
+
+function showUploadPanel({ clearResults = false } = {}) {
+  document.getElementById('loading-panel').classList.add('hidden');
+  document.getElementById('results-panel').classList.add('hidden');
+  document.getElementById('upload-panel').classList.remove('hidden');
+  if (clearResults) {
+    currentAnalysis = null;
+    allCards = [];
+  }
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+
+document.getElementById('new-review-btn')?.addEventListener('click', () => showUploadPanel({ clearResults: true }));
 
 // ── Submit ────────────────────────────────────────────────────────────────────
 document.getElementById('submit-btn').addEventListener('click', submitDeck);
@@ -972,8 +1025,7 @@ function showLoading(msg) {
 }
 
 function hideLoading() {
-  document.getElementById('loading-panel').classList.add('hidden');
-  document.getElementById('upload-panel').classList.remove('hidden');
+  showUploadPanel();
 }
 
 // ── Render Results ────────────────────────────────────────────────────────────
@@ -987,7 +1039,7 @@ function renderResults(data) {
   renderValidation(data);
   renderSynergy(data);
   renderBracket(data);
-  if (featureEnabled('ai_review')) renderAI(data);
+  renderAI(data);
   renderCardList(data.cards || []);
 }
 
@@ -1625,6 +1677,7 @@ function renderAI(data) {
   const el = document.getElementById('ai-content');
   const deckNames = new Set((data.cards || []).map(c => (c.name || '').toLowerCase()));
   const edhrec = data.edhrec || {};
+  const aiEnabled = Boolean(data.features?.ai_review ?? featureEnabled('ai_review'));
 
   const edhrecHtml = buildEdhrecSection(edhrec, deckNames);
 
@@ -1652,7 +1705,15 @@ function renderAI(data) {
           </div>
         </div>
       ` : ''}
-      ${!edhrec.available ? `
+      ${!aiEnabled && edhrec.available ? `
+        <div class="panel-inner" style="margin-top:14px">
+          <h3>AI Review Disabled</h3>
+          <p style="color:var(--text2);font-size:.82rem">
+            Model-backed recommendations are disabled for this deployment. EDHREC and creativity analysis are still shown here.
+          </p>
+        </div>
+      ` : ''}
+      ${aiEnabled && !edhrec.available ? `
         <div class="ai-unavailable" style="margin-top:14px">
           <p>&#129302; AI advisor is offline.</p>
           <p style="margin-top:8px;font-size:.82rem">Set <code>ANTHROPIC_API_KEY</code>, <code>OPENAI_API_KEY</code>, or choose <code>Ollama</code> with a local model.</p>
