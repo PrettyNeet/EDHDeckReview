@@ -60,6 +60,31 @@ BUDGET_TIERS = {
 }
 
 
+def _parse_bool_env(value: Optional[str], default: bool) -> bool:
+    if value is None:
+        return default
+    normalized = value.strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    return default
+
+
+def _feature_enabled(name: str, default: bool) -> bool:
+    specific = os.environ.get(f"FEATURE_{name.upper()}_ENABLED")
+    if specific is not None:
+        return _parse_bool_env(specific, default)
+    return _parse_bool_env(os.environ.get(f"{name.upper()}_ENABLED"), default)
+
+
+def _feature_flags() -> dict:
+    # Keep local behavior unchanged, but default costly AI calls off on Vercel.
+    return {
+        "ai_review": _feature_enabled("ai_review", default=not IS_VERCEL),
+    }
+
+
 def _parse_commander_roles(raw: Optional[str]) -> list[str]:
     """Parse user-supplied target commander roles from JSON or comma text."""
     if not raw:
@@ -141,6 +166,7 @@ async def app_config():
     return {
         **public_config(),
         "data_updates_enabled": not IS_VERCEL,
+        "features": _feature_flags(),
     }
 
 
@@ -372,6 +398,8 @@ def _run_review(
     budget_tier: Optional[dict] = None,
 ) -> dict:
     """Execute the full review pipeline and return the analysis dict."""
+    features = _feature_flags()
+    ai_review_enabled = features["ai_review"]
 
     # 1. Parse + enrich with Scryfall
     entries = parse_decklist_text(decklist_text, commander_hint=commander_hint)
@@ -478,10 +506,13 @@ def _run_review(
         "ai_available": False,
         "ai_provider": None,
         "ai_model": None,
+        "features": features,
     }
 
     # 8. AI review (optional)
-    if not skip_ai:
+    if not ai_review_enabled:
+        analysis["ai_disabled_reason"] = "AI review is disabled by feature flag."
+    elif not skip_ai:
         ai_result = ai_advisor.generate_review(
             analysis,
             intended_bracket=intended_bracket,

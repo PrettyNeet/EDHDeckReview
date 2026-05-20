@@ -63,9 +63,28 @@ function updateAuthShell() {
   }
 }
 
+function featureEnabled(name) {
+  return Boolean(_appConfig.features?.[name]);
+}
+
+function applyFeatureFlags() {
+  const aiEnabled = featureEnabled('ai_review');
+  document.querySelectorAll('.ai-feature').forEach(el => {
+    el.classList.toggle('hidden', !aiEnabled);
+  });
+
+  if (!aiEnabled) {
+    const activeAiTab = document.querySelector('.tab-btn[data-tab="ai"].active');
+    if (activeAiTab) {
+      document.querySelector('.tab-btn[data-tab="overview"]')?.click();
+    }
+  }
+}
+
 async function loadAppConfig() {
   const r = await fetch('/api/config');
   _appConfig = await r.json();
+  applyFeatureFlags();
 }
 
 async function initAuth() {
@@ -585,7 +604,7 @@ function bindTargetControls() {
   }
   if (rerunBtn) {
     rerunBtn.addEventListener('click', () => {
-      document.getElementById('skip-ai-check').checked = false;
+      document.getElementById('skip-ai-check').checked = !featureEnabled('ai_review');
       submitDeck();
     });
   }
@@ -825,9 +844,10 @@ async function submitDeck() {
   const commander = document.getElementById('commander-input').value.trim();
   const bracket = getActiveBracketValue();
   const budgetTier = document.getElementById('budget-tier-select').value;
-  const aiProvider = document.getElementById('ai-provider-select').value;
-  const aiModel = document.getElementById('ai-model-input').value.trim();
-  const skipAi = document.getElementById('skip-ai-check').checked;
+  const aiEnabled = featureEnabled('ai_review');
+  const aiProvider = aiEnabled ? document.getElementById('ai-provider-select').value : '';
+  const aiModel = aiEnabled ? document.getElementById('ai-model-input').value.trim() : '';
+  const skipAi = aiEnabled ? document.getElementById('skip-ai-check').checked : true;
   const targetRoles = getTargetCommanderRoles();
   const hasTargetRoleEditor = Boolean(document.getElementById('target-role-tags'));
 
@@ -893,7 +913,7 @@ function renderResults(data) {
   renderValidation(data);
   renderSynergy(data);
   renderBracket(data);
-  renderAI(data);
+  if (featureEnabled('ai_review')) renderAI(data);
   renderCardList(data.cards || []);
 }
 

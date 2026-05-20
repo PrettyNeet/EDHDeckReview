@@ -35,11 +35,22 @@ SUPABASE_URL=https://your-project.supabase.co
 SUPABASE_ANON_KEY=...
 SUPABASE_SERVICE_ROLE_KEY=...
 AI_PROVIDER=auto
+FEATURE_AI_REVIEW_ENABLED=false
 ANTHROPIC_API_KEY=...
 OPENAI_API_KEY=...
 ```
 
 Only `SUPABASE_URL` and `SUPABASE_ANON_KEY` are returned to the browser by `/api/config`.
+
+## Feature flags
+
+Feature flags are returned through `/api/config` and enforced by the backend.
+
+| Variable | Default | Effect |
+|---|---|---|
+| `FEATURE_AI_REVIEW_ENABLED` | `false` on Vercel, `true` locally | Shows Advisor controls and allows model-backed AI review calls |
+
+When `FEATURE_AI_REVIEW_ENABLED=false`, the web UI hides Advisor provider/model controls and the Advisor tab, and the review API will not call Anthropic/OpenAI/Ollama even if a request includes `skip_ai=false`.
 
 ## Scryfall cache freshness
 
