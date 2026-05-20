@@ -1,0 +1,34 @@
+{
+  "builds": [
+    {
+      "src": "app/main.py",
+      "use": "@vercel/python"
+    }
+  ],
+  "routes": [
+    {
+      "src": "/(.*)",
+      "dest": "app/main.py"
+    }
+  ],
+  "functions": {
+    "app/main.py": {
+      "maxDuration": 60,
+      "includeFiles": [
+        "app/**",
+        "frontend/**",
+        "docs/edhdeckthemes.csv",
+        "docs/edhdecktypals.csv",
+        "RoughDeckPlan.csv",
+        "cache/card_index.json.gz",
+        "cache/otag_index.json.gz",
+        "cache/index_metadata.json"
+      ],
+      "excludeFiles": [
+        "Scryfall src/**",
+        "results/**",
+        "tests/**"
+      ]
+    }
+  }
+}

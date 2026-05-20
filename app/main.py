@@ -20,7 +20,7 @@ import threading
 from pathlib import Path
 from typing import Optional
 
-from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import BackgroundTasks, Depends, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -43,10 +43,13 @@ from app.agents import ai_advisor
 from app.agents import edhrec as edhrec_agent
 from app.agents import moxfield as moxfield_agent
 from app.agents.role_catalog import get_role_catalog
+from app.auth import public_config, require_invited_user
 
 CACHE_DIR = ROOT / "cache"
 RESULTS_DIR = ROOT / "results"
-RESULTS_DIR.mkdir(exist_ok=True)
+IS_VERCEL = bool(os.environ.get("VERCEL"))
+if not IS_VERCEL:
+    RESULTS_DIR.mkdir(exist_ok=True)
 
 BUDGET_TIERS = {
     "budget": {"label": "Budget", "max_card_price": 5.0},
@@ -132,8 +135,17 @@ async def serve_index():
     return HTMLResponse("<h1>MTG Deck Review</h1><p>Frontend not found.</p>")
 
 
+@app.get("/api/config")
+async def app_config():
+    """Return public frontend configuration."""
+    return {
+        **public_config(),
+        "data_updates_enabled": not IS_VERCEL,
+    }
+
+
 @app.get("/api/commander-roles")
-async def commander_roles_catalog():
+async def commander_roles_catalog(_user=Depends(require_invited_user)):
     """Return EDHREC-derived theme and typal role metadata for the Plan tab."""
     return JSONResponse(content=get_role_catalog())
 
@@ -177,8 +189,10 @@ async def index_status():
 
 
 @app.post("/api/index/build")
-async def trigger_index_build(force: bool = False):
+async def trigger_index_build(force: bool = False, _user=Depends(require_invited_user)):
     """Build (or rebuild) the Scryfall card index. Can take 20-40 seconds."""
+    if IS_VERCEL:
+        raise HTTPException(status_code=403, detail="Index rebuilds are disabled on Vercel. Refresh the deploy cache and redeploy.")
     try:
         path = build_index(force=force)
         stat = path.stat()
@@ -207,11 +221,13 @@ async def otag_index_status():
 
 
 @app.post("/api/otag-index/build")
-async def trigger_otag_index_build(force: bool = False):
+async def trigger_otag_index_build(force: bool = False, _user=Depends(require_invited_user)):
     """
     Build (or rebuild) the Scryfall otag index.
     Queries the Scryfall search API for each tracked otag — takes ~10–60 seconds.
     """
+    if IS_VERCEL:
+        raise HTTPException(status_code=403, detail="Otag rebuilds are disabled on Vercel. Refresh the deploy cache and redeploy.")
     try:
         path = build_otag_index(force=force)
         return {"success": True, "size_kb": round(path.stat().st_size / 1024, 1)}
@@ -222,7 +238,7 @@ async def trigger_otag_index_build(force: bool = False):
 # ─── Bulk data management ─────────────────────────────────────────────────────
 
 @app.get("/api/bulk-data/status")
-async def bulk_data_status(check_remote: bool = False):
+async def bulk_data_status(check_remote: bool = False, _user=Depends(require_invited_user)):
     """
     Return the age of the local bulk data file.
     Pass ?check_remote=true to also query the Scryfall API for the latest
@@ -241,7 +257,7 @@ async def bulk_data_status(check_remote: bool = False):
 
 
 @app.get("/api/bulk-data/progress")
-async def bulk_data_progress():
+async def bulk_data_progress(_user=Depends(require_invited_user)):
     """Poll the progress of an in-flight download/rebuild."""
     if PROGRESS_FILE.exists():
         try:
@@ -288,12 +304,14 @@ def _run_download_and_rebuild():
 
 
 @app.post("/api/bulk-data/update")
-async def update_bulk_data(background_tasks: BackgroundTasks):
+async def update_bulk_data(background_tasks: BackgroundTasks, _user=Depends(require_invited_user)):
     """
     Fetch the latest Scryfall bulk data and rebuild the card index.
     Runs in the background — poll /api/bulk-data/progress for status.
     Returns 409 if a download is already running.
     """
+    if IS_VERCEL:
+        raise HTTPException(status_code=403, detail="Bulk data updates are disabled on Vercel. Refresh the deploy cache and redeploy.")
     if not _download_lock.acquire(blocking=False):
         raise HTTPException(status_code=409, detail="A download is already in progress.")
 
@@ -310,7 +328,7 @@ async def update_bulk_data(background_tasks: BackgroundTasks):
 # ─── Card lookup ──────────────────────────────────────────────────────────────
 
 @app.get("/api/card/{name}")
-async def get_card(name: str):
+async def get_card(name: str, _user=Depends(require_invited_user)):
     card = lookup(name)
     if not card:
         raise HTTPException(status_code=404, detail=f"Card '{name}' not found.")
@@ -318,7 +336,7 @@ async def get_card(name: str):
 
 
 @app.get("/api/suggest")
-async def autocomplete(q: str, limit: int = 8):
+async def autocomplete(q: str, limit: int = 8, _user=Depends(require_invited_user)):
     suggestions = suggest_names(q, limit=limit)
     return {"suggestions": suggestions}
 
@@ -326,7 +344,7 @@ async def autocomplete(q: str, limit: int = 8):
 # ─── Moxfield import ──────────────────────────────────────────────────────────
 
 @app.get("/api/moxfield")
-async def import_moxfield(url: str):
+async def import_moxfield(url: str, _user=Depends(require_invited_user)):
     """Fetch a Moxfield deck URL and convert it to plain-text decklist format."""
     result = moxfield_agent.fetch_and_convert(url)
     if result["error"]:
@@ -484,6 +502,7 @@ async def review_from_file(
     ai_model: Optional[str] = Form(None),
     commander_roles: Optional[str] = Form(None),
     budget_tier: Optional[str] = Form(None),
+    _user=Depends(require_invited_user),
 ):
     """Upload a .txt decklist file for full review."""
     content = await file.read()
@@ -503,11 +522,11 @@ async def review_from_file(
         _parse_budget_tier(budget_tier),
     )
 
-    # Save result to disk
-    safe_name = (file.filename or "deck").replace(" ", "_").replace(".txt", "")
-    out_path = RESULTS_DIR / f"{safe_name}_review.json"
-    out_path.write_text(json.dumps(analysis, ensure_ascii=False, indent=2), encoding="utf-8")
-    analysis["saved_to"] = str(out_path)
+    if not IS_VERCEL:
+        safe_name = (file.filename or "deck").replace(" ", "_").replace(".txt", "")
+        out_path = RESULTS_DIR / f"{safe_name}_review.json"
+        out_path.write_text(json.dumps(analysis, ensure_ascii=False, indent=2), encoding="utf-8")
+        analysis["saved_to"] = str(out_path)
 
     return JSONResponse(content=analysis)
 
@@ -522,6 +541,7 @@ async def review_from_text(
     ai_model: Optional[str] = Form(None),
     commander_roles: Optional[str] = Form(None),
     budget_tier: Optional[str] = Form(None),
+    _user=Depends(require_invited_user),
 ):
     """Submit a decklist as raw text for full review."""
     analysis = _run_review(

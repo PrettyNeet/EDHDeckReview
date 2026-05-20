@@ -32,6 +32,9 @@ python run.py
 
 Open **http://localhost:8000** in your browser.
 
+For hosted deployment with Vercel and Supabase invite auth, see
+[docs/deployment-vercel-supabase.md](docs/deployment-vercel-supabase.md).
+
 ### 4. Configure an AI provider (optional)
 
 Copy `.env.example` to `.env` and fill in at least one provider:
