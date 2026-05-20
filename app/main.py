@@ -32,7 +32,7 @@ sys.path.insert(0, str(ROOT))
 from app.agents.card_lookup import (
     build_index, lookup, suggest_names,
     check_bulk_data_freshness, fetch_bulk_data_metadata, download_bulk_data,
-    build_otag_index, OTAG_INDEX_PATH,
+    build_otag_index, CARD_INDEX_GZ_PATH, CARD_INDEX_PATH, INDEX_METADATA_PATH, OTAG_INDEX_PATH,
 )
 from app.agents.deck_parser import parse_decklist_text
 from app.agents.validator import validate
@@ -58,6 +58,31 @@ BUDGET_TIERS = {
     "premium": {"label": "Premium", "max_card_price": 60.0},
     "unlimited": {"label": "No Limit", "max_card_price": None},
 }
+
+
+def _parse_bool_env(value: Optional[str], default: bool) -> bool:
+    if value is None:
+        return default
+    normalized = value.strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    return default
+
+
+def _feature_enabled(name: str, default: bool) -> bool:
+    specific = os.environ.get(f"FEATURE_{name.upper()}_ENABLED")
+    if specific is not None:
+        return _parse_bool_env(specific, default)
+    return _parse_bool_env(os.environ.get(f"{name.upper()}_ENABLED"), default)
+
+
+def _feature_flags() -> dict:
+    # Keep local behavior unchanged, but default costly AI calls off on Vercel.
+    return {
+        "ai_review": _feature_enabled("ai_review", default=not IS_VERCEL),
+    }
 
 
 def _parse_commander_roles(raw: Optional[str]) -> list[str]:
@@ -141,6 +166,7 @@ async def app_config():
     return {
         **public_config(),
         "data_updates_enabled": not IS_VERCEL,
+        "features": _feature_flags(),
     }
 
 
@@ -158,7 +184,7 @@ if FRONTEND_DIR.exists():
 
 @app.get("/health")
 async def health():
-    index_ready = (CACHE_DIR / "card_index.json").exists()
+    index_ready = CARD_INDEX_PATH.exists() or CARD_INDEX_GZ_PATH.exists()
     bulk = check_bulk_data_freshness()
     return {
         "status": "ok",
@@ -177,14 +203,21 @@ async def health():
 
 @app.get("/api/index/status")
 async def index_status():
-    cache_path = CACHE_DIR / "card_index.json"
+    cache_path = CARD_INDEX_PATH if CARD_INDEX_PATH.exists() else CARD_INDEX_GZ_PATH
     if cache_path.exists():
         stat = cache_path.stat()
-        return {
+        payload = {
             "ready": True,
             "size_mb": round(stat.st_size / 1_048_576, 1),
             "modified": stat.st_mtime,
+            "compressed": cache_path.suffix == ".gz",
         }
+        if INDEX_METADATA_PATH.exists():
+            try:
+                payload["metadata"] = json.loads(INDEX_METADATA_PATH.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, OSError):
+                pass
+        return payload
     return {"ready": False}
 
 
@@ -365,6 +398,8 @@ def _run_review(
     budget_tier: Optional[dict] = None,
 ) -> dict:
     """Execute the full review pipeline and return the analysis dict."""
+    features = _feature_flags()
+    ai_review_enabled = features["ai_review"]
 
     # 1. Parse + enrich with Scryfall
     entries = parse_decklist_text(decklist_text, commander_hint=commander_hint)
@@ -471,10 +506,13 @@ def _run_review(
         "ai_available": False,
         "ai_provider": None,
         "ai_model": None,
+        "features": features,
     }
 
     # 8. AI review (optional)
-    if not skip_ai:
+    if not ai_review_enabled:
+        analysis["ai_disabled_reason"] = "AI review is disabled by feature flag."
+    elif not skip_ai:
         ai_result = ai_advisor.generate_review(
             analysis,
             intended_bracket=intended_bracket,

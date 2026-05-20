@@ -140,6 +140,11 @@ main { max-width: 1100px; margin: 0 auto; padding: 28px 20px 60px; }
   font-size: .9rem;
 }
 .auth-form input:focus { outline: none; border-color: var(--accent); }
+#auth-confirm-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
 .auth-actions {
   display: grid;
   grid-template-columns: 1fr auto;
@@ -156,6 +161,18 @@ main { max-width: 1100px; margin: 0 auto; padding: 28px 20px 60px; }
 }
 .auth-status.error { color: var(--red); }
 .auth-status.ok { color: var(--green); }
+.auth-link-btn {
+  appearance: none;
+  background: none;
+  border: none;
+  color: var(--accent2);
+  cursor: pointer;
+  font-size: .82rem;
+  padding: 2px 0;
+  text-align: left;
+  width: fit-content;
+}
+.auth-link-btn:hover { color: var(--text); text-decoration: underline; }
 
 /* ── Panels ───────────────────────────────────────────────────────────── */
 .panel {

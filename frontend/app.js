@@ -9,6 +9,7 @@ let _commanderRoleByName = new Map();
 let _appConfig = { auth_enabled: false, data_updates_enabled: true };
 let _supabaseClient = null;
 let _session = null;
+let _authMode = 'sign-in';
 
 // Per-table sort state (mutated in place by initTableSort)
 const _cardSort       = { col: 'name',    dir: 1  };
@@ -45,6 +46,68 @@ function setAuthStatus(message, kind = '') {
   el.className = `auth-status ${kind}`.trim();
 }
 
+function setAuthMode(mode) {
+  _authMode = mode;
+  const title = document.getElementById('auth-title');
+  const note = document.getElementById('auth-note');
+  const email = document.getElementById('auth-email');
+  const password = document.getElementById('auth-password');
+  const confirmWrap = document.getElementById('auth-confirm-wrap');
+  const confirm = document.getElementById('auth-password-confirm');
+  const submit = document.getElementById('auth-submit-btn');
+  const secondary = document.getElementById('auth-secondary-btn');
+  const reset = document.getElementById('auth-reset-btn');
+  const back = document.getElementById('auth-back-btn');
+
+  const recovery = mode === 'recovery';
+  const signUp = mode === 'sign-up';
+  const resetRequest = mode === 'reset-request';
+
+  title.textContent = recovery ? 'Set New Password' : (signUp ? 'Create Account' : (resetRequest ? 'Reset Password' : 'Sign In'));
+  note.textContent = recovery
+    ? 'Enter a new password for your invited account.'
+    : signUp
+      ? 'Create a Supabase login using your whitelisted email.'
+      : resetRequest
+        ? 'Enter your email and we will send a password reset link.'
+        : 'Use the email and password for your invited account.';
+
+  email.classList.toggle('hidden', recovery);
+  email.previousElementSibling.classList.toggle('hidden', recovery);
+  password.classList.toggle('hidden', resetRequest);
+  password.previousElementSibling.classList.toggle('hidden', resetRequest);
+  confirmWrap.classList.toggle('hidden', !(signUp || recovery));
+  confirm.required = signUp || recovery;
+  password.required = !resetRequest;
+  password.autocomplete = signUp || recovery ? 'new-password' : 'current-password';
+
+  submit.textContent = recovery ? 'Update Password' : (signUp ? 'Create Account' : (resetRequest ? 'Send Reset Link' : 'Sign In'));
+  secondary.textContent = signUp ? 'I Have an Account' : 'Create Account';
+  secondary.classList.toggle('hidden', recovery || resetRequest);
+  reset.classList.toggle('hidden', signUp || recovery || resetRequest);
+  back.classList.toggle('hidden', mode === 'sign-in');
+  setAuthStatus('');
+}
+
+function getAuthFormValues() {
+  const email = document.getElementById('auth-email').value.trim();
+  const password = document.getElementById('auth-password').value;
+  const confirm = document.getElementById('auth-password-confirm').value;
+  return { email, password, confirm };
+}
+
+function validateNewPassword(password, confirm) {
+  if (password.length < 6) {
+    setAuthStatus('Password must be at least 6 characters.', 'error');
+    return false;
+  }
+  if (password !== confirm) {
+    setAuthStatus('Passwords do not match.', 'error');
+    return false;
+  }
+  return true;
+}
+
 function updateAuthShell() {
   const authPanel = document.getElementById('auth-panel');
   const appShell = document.getElementById('app-shell');
@@ -63,9 +126,28 @@ function updateAuthShell() {
   }
 }
 
+function featureEnabled(name) {
+  return Boolean(_appConfig.features?.[name]);
+}
+
+function applyFeatureFlags() {
+  const aiEnabled = featureEnabled('ai_review');
+  document.querySelectorAll('.ai-feature').forEach(el => {
+    el.classList.toggle('hidden', !aiEnabled);
+  });
+
+  if (!aiEnabled) {
+    const activeAiTab = document.querySelector('.tab-btn[data-tab="ai"].active');
+    if (activeAiTab) {
+      document.querySelector('.tab-btn[data-tab="overview"]')?.click();
+    }
+  }
+}
+
 async function loadAppConfig() {
   const r = await fetch('/api/config');
   _appConfig = await r.json();
+  applyFeatureFlags();
 }
 
 async function initAuth() {
@@ -90,11 +172,22 @@ async function initAuth() {
   _supabaseClient = window.supabase.createClient(_appConfig.supabase_url, _appConfig.supabase_anon_key);
   const { data } = await _supabaseClient.auth.getSession();
   _session = data.session;
+  if (window.location.hash.includes('type=recovery')) {
+    setAuthMode('recovery');
+  } else {
+    setAuthMode('sign-in');
+  }
   updateAuthShell();
 
   _supabaseClient.auth.onAuthStateChange((_event, session) => {
     _session = session;
     updateAuthShell();
+    if (_event === 'PASSWORD_RECOVERY') {
+      setAuthMode('recovery');
+      document.getElementById('auth-panel').classList.remove('hidden');
+      document.getElementById('app-shell').classList.add('hidden');
+      return;
+    }
     if (session) startAuthenticatedApp();
   });
 
@@ -585,7 +678,7 @@ function bindTargetControls() {
   }
   if (rerunBtn) {
     rerunBtn.addEventListener('click', () => {
-      document.getElementById('skip-ai-check').checked = false;
+      document.getElementById('skip-ai-check').checked = !featureEnabled('ai_review');
       submitDeck();
     });
   }
@@ -825,9 +918,10 @@ async function submitDeck() {
   const commander = document.getElementById('commander-input').value.trim();
   const bracket = getActiveBracketValue();
   const budgetTier = document.getElementById('budget-tier-select').value;
-  const aiProvider = document.getElementById('ai-provider-select').value;
-  const aiModel = document.getElementById('ai-model-input').value.trim();
-  const skipAi = document.getElementById('skip-ai-check').checked;
+  const aiEnabled = featureEnabled('ai_review');
+  const aiProvider = aiEnabled ? document.getElementById('ai-provider-select').value : '';
+  const aiModel = aiEnabled ? document.getElementById('ai-model-input').value.trim() : '';
+  const skipAi = aiEnabled ? document.getElementById('skip-ai-check').checked : true;
   const targetRoles = getTargetCommanderRoles();
   const hasTargetRoleEditor = Boolean(document.getElementById('target-role-tags'));
 
@@ -893,7 +987,7 @@ function renderResults(data) {
   renderValidation(data);
   renderSynergy(data);
   renderBracket(data);
-  renderAI(data);
+  if (featureEnabled('ai_review')) renderAI(data);
   renderCardList(data.cards || []);
 }
 
@@ -1892,13 +1986,74 @@ document.getElementById('auth-form')?.addEventListener('submit', async event => 
   event.preventDefault();
   if (!_supabaseClient) return;
 
-  const email = document.getElementById('auth-email').value.trim();
-  const password = document.getElementById('auth-password').value;
-  setAuthStatus('Signing in...');
+  const { email, password, confirm } = getAuthFormValues();
 
+  if (_authMode === 'reset-request') {
+    if (!email) {
+      setAuthStatus('Enter your email first.', 'error');
+      return;
+    }
+    setAuthStatus('Sending reset link...');
+    const { error } = await _supabaseClient.auth.resetPasswordForEmail(email, {
+      redirectTo: window.location.origin,
+    });
+    if (error) {
+      setAuthStatus(error.message, 'error');
+      return;
+    }
+    setAuthStatus('Password reset link sent. Check your email.', 'ok');
+    return;
+  }
+
+  if (_authMode === 'recovery') {
+    if (!validateNewPassword(password, confirm)) return;
+    setAuthStatus('Updating password...');
+    const { data, error } = await _supabaseClient.auth.updateUser({ password });
+    if (error) {
+      setAuthStatus(error.message, 'error');
+      return;
+    }
+    _session = data.user ? _session : null;
+    setAuthStatus('Password updated. You can now use the app.', 'ok');
+    setAuthMode('sign-in');
+    updateAuthShell();
+    if (_session) await startAuthenticatedApp();
+    return;
+  }
+
+  if (!email || !password) {
+    setAuthStatus('Enter an email and password first.', 'error');
+    return;
+  }
+
+  if (_authMode === 'sign-up') {
+    if (!validateNewPassword(password, confirm)) return;
+    setAuthStatus('Creating account...');
+    const { data, error } = await _supabaseClient.auth.signUp({
+      email,
+      password,
+      options: { emailRedirectTo: window.location.origin },
+    });
+    if (error) {
+      setAuthStatus(error.message, 'error');
+      return;
+    }
+    _session = data.session;
+    if (_session) {
+      setAuthStatus('Account created. Checking invite status...', 'ok');
+      updateAuthShell();
+      await startAuthenticatedApp();
+    } else {
+      setAuthStatus('Account created. Check your email to confirm it, then sign in.', 'ok');
+      setAuthMode('sign-in');
+    }
+    return;
+  }
+
+  setAuthStatus('Signing in...');
   const { data, error } = await _supabaseClient.auth.signInWithPassword({ email, password });
   if (error) {
-    setAuthStatus(error.message, 'error');
+    setAuthStatus(`${error.message}. If you have not set a password yet, create an account with your whitelisted email or use password reset.`, 'error');
     return;
   }
   _session = data.session;
@@ -1907,26 +2062,16 @@ document.getElementById('auth-form')?.addEventListener('submit', async event => 
   await startAuthenticatedApp();
 });
 
-document.getElementById('sign-up-btn')?.addEventListener('click', async () => {
-  if (!_supabaseClient) return;
+document.getElementById('auth-secondary-btn')?.addEventListener('click', () => {
+  setAuthMode(_authMode === 'sign-up' ? 'sign-in' : 'sign-up');
+});
 
-  const email = document.getElementById('auth-email').value.trim();
-  const password = document.getElementById('auth-password').value;
-  if (!email || !password) {
-    setAuthStatus('Enter an email and password first.', 'error');
-    return;
-  }
+document.getElementById('auth-reset-btn')?.addEventListener('click', () => {
+  setAuthMode('reset-request');
+});
 
-  setAuthStatus('Creating account...');
-  const { data, error } = await _supabaseClient.auth.signUp({ email, password });
-  if (error) {
-    setAuthStatus(error.message, 'error');
-    return;
-  }
-  _session = data.session;
-  setAuthStatus('Account created. If this email is invited, the tool will unlock after sign-in.', 'ok');
-  updateAuthShell();
-  if (_session) await startAuthenticatedApp();
+document.getElementById('auth-back-btn')?.addEventListener('click', () => {
+  setAuthMode('sign-in');
 });
 
 document.getElementById('sign-out-btn')?.addEventListener('click', async () => {

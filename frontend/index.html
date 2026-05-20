@@ -39,17 +39,23 @@
   </div>
 
   <section id="auth-panel" class="panel auth-panel hidden">
-    <h2>Sign In</h2>
-    <p class="auth-note">Use the email and password for your invited account.</p>
+    <h2 id="auth-title">Sign In</h2>
+    <p id="auth-note" class="auth-note">Use the email and password for your invited account.</p>
     <form id="auth-form" class="auth-form">
       <label for="auth-email">Email</label>
       <input type="email" id="auth-email" autocomplete="email" required />
       <label for="auth-password">Password</label>
       <input type="password" id="auth-password" autocomplete="current-password" required />
-      <div class="auth-actions">
-        <button type="submit" id="sign-in-btn" class="btn-primary">Sign In</button>
-        <button type="button" id="sign-up-btn" class="btn-secondary">Create Account</button>
+      <div id="auth-confirm-wrap" class="hidden">
+        <label for="auth-password-confirm">Confirm Password</label>
+        <input type="password" id="auth-password-confirm" autocomplete="new-password" />
       </div>
+      <div class="auth-actions">
+        <button type="submit" id="auth-submit-btn" class="btn-primary">Sign In</button>
+        <button type="button" id="auth-secondary-btn" class="btn-secondary">Create Account</button>
+      </div>
+      <button type="button" id="auth-reset-btn" class="auth-link-btn">Forgot password?</button>
+      <button type="button" id="auth-back-btn" class="auth-link-btn hidden">Back to sign in</button>
       <div id="auth-status" class="auth-status"></div>
     </form>
   </section>
@@ -104,7 +110,7 @@
             <option value="premium">Premium — up to $60/card</option>
           </select>
         </div>
-        <div class="option-group">
+        <div class="option-group ai-feature">
           <label for="ai-provider-select">Advisor Provider</label>
           <select id="ai-provider-select">
             <option value="">Auto</option>
@@ -113,11 +119,11 @@
             <option value="ollama">Ollama</option>
           </select>
         </div>
-        <div class="option-group">
+        <div class="option-group ai-feature">
           <label for="ai-model-input">Advisor Model (optional)</label>
           <input type="text" id="ai-model-input" placeholder="Use server default" />
         </div>
-        <div class="option-group">
+        <div class="option-group ai-feature">
           <label class="checkbox-label">
             <input type="checkbox" id="skip-ai-check" />
             Skip AI review (faster)
@@ -147,7 +153,7 @@
         <button class="tab-btn" data-tab="validation">Validation</button>
         <button class="tab-btn" data-tab="synergy">Synergy</button>
         <button class="tab-btn" data-tab="bracket">Bracket</button>
-        <button class="tab-btn" data-tab="ai">Advisor</button>
+        <button class="tab-btn ai-feature" data-tab="ai">Advisor</button>
         <button class="tab-btn" data-tab="cards">Card List</button>
       </nav>
 
