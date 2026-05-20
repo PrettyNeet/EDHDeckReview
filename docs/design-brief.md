@@ -137,12 +137,22 @@ border-left: 3px solid var(--red);    /* error */
 border-left: 3px solid var(--accent); /* advisor suggestion */
 ```
 
+Do not use browser `alert()` or `confirm()` for normal app workflows. Use:
+- `.app-status` for global transient or persistent feedback, including submit/copy/update errors.
+- `.moxfield-status` for Moxfield import feedback.
+- `.confirm-overlay` / `.confirm-box` for destructive or long-running confirmations such as bulk-data updates.
+- `aria-live="polite"` on status regions so async feedback is announced.
+
+The submit panel includes `.input-status` readiness chips for decklist presence, index readiness, bracket, budget, and AI state. Keep these chips short and operational.
+
 ---
 
 ## Layout Conventions
 
 ### Page structure
-`<header>` (sticky, 56px, glass blur) → `<main>` (max-width 1120px, centered) → `.panel` stack.
+`<header>` (sticky, minimum 56px, glass blur) → `<main>` (max-width 1120px, centered) → `.panel` stack.
+
+Header status controls may wrap on narrow screens. Avoid fixed-width header additions that crowd the logo or badges.
 
 ### Grids
 - `.grid-2` — two equal columns, 14px gap. Collapses to 1 column at ≤640px.
@@ -158,6 +168,13 @@ border-left: 3px solid var(--accent); /* advisor suggestion */
 4. CMC Curve vs Target + Playtest Simulation (`.grid-2`)
 5. Mulligan Guide + Sequencing Guide (`.grid-2`)
 6. Card Role Map (full width)
+
+### Results layout
+- Results begin with `.results-actions`, `#commander-header`, and `#result-summary`.
+- `#result-summary` is a compact scan band for legality, deck size, bracket, largest coverage gap, warnings, and Analysis availability.
+- `.tab-nav` is sticky within the results view and uses ARIA tab semantics. Keep each `.tab-btn` paired with its `role="tabpanel"` via `aria-controls` / `aria-labelledby`.
+- `.tab-badge` is for actionable counts only: validation issues, synergy clusters, game changers, Analysis recommendations, and card count.
+- New completed reviews reset the active tab to Overview and must not accumulate duplicate generated panels or legends.
 
 ---
 
@@ -183,6 +200,7 @@ Both lists feed into `getTargetCommanderRoles()` which is what the re-run API ca
 ## Motion
 
 - Tab switches: `background`/`color` transition `0.15s`.
+- Sticky tab nav: no extra motion beyond normal scroll behavior.
 - Bar/chart fills: `width` transition `0.4s–0.55s cubic-bezier(.4,0,.2,1)`.
 - Hover lifts on cards/buttons: `transform: translateY(-1px)`, `0.1s–0.15s`.
 - Hover fades (remove buttons, cluster tags): `opacity 0.15s`.
@@ -191,6 +209,8 @@ Both lists feed into `getTargetCommanderRoles()` which is what the re-run API ca
 - Stale data pulse: `opacity` keyframe, `2s infinite`.
 
 Avoid adding animations that run continuously except for the stale pulse and the loading spinner. One entrance animation per interaction is enough.
+
+Generated chart legends and reasoning panels should be updated in place. Avoid `insertAdjacentHTML()` patterns that append duplicate UI on re-render.
 
 ---
 

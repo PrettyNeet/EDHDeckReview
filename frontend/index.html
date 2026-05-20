@@ -22,21 +22,33 @@
       <button id="sign-out-btn" class="btn-update hidden" title="Sign out">Sign Out</button>
       <div id="bulk-status" class="badge badge-pending" title="Scryfall bulk data age">Data: checking…</div>
       <div id="index-status" class="badge badge-pending">Index: checking…</div>
-      <button id="update-data-btn" class="btn-update hidden" title="Download latest Scryfall data">&#8635; Update Data</button>
+      <button id="update-data-btn" class="btn-update hidden" title="Download latest Scryfall data">Update Data</button>
     </div>
   </header>
 
   <!-- Download progress overlay -->
   <div id="download-overlay" class="download-overlay hidden">
-    <div class="download-box">
+    <div class="download-box" role="status" aria-live="polite">
       <div class="download-title">Updating Scryfall Data</div>
       <div id="download-message" class="download-message">Starting…</div>
       <div class="download-bar-bg">
-        <div id="download-bar" class="download-bar-fill" style="width:0%"></div>
+        <div id="download-bar" class="download-bar-fill"></div>
       </div>
       <div id="download-pct" class="download-pct">0%</div>
     </div>
   </div>
+
+  <div id="confirm-overlay" class="confirm-overlay hidden">
+    <div class="confirm-box" role="dialog" aria-modal="true" aria-labelledby="confirm-title" aria-describedby="confirm-message">
+      <div id="confirm-title" class="confirm-title">Confirm Action</div>
+      <div id="confirm-message" class="confirm-message"></div>
+      <div class="confirm-actions">
+        <button type="button" id="confirm-cancel-btn" class="btn-secondary">Cancel</button>
+        <button type="button" id="confirm-ok-btn" class="btn-primary confirm-primary">Continue</button>
+      </div>
+    </div>
+  </div>
+  <div id="app-status" class="app-status hidden" role="status" aria-live="polite"></div>
 
   <section id="auth-panel" class="panel auth-panel hidden">
     <h2 id="auth-title">Sign In</h2>
@@ -75,10 +87,11 @@
       <div class="divider"><span>or import from Moxfield</span></div>
 
       <div class="moxfield-row">
+        <label class="sr-only" for="moxfield-url">Moxfield deck URL</label>
         <input type="text" id="moxfield-url" placeholder="https://moxfield.com/decks/…" />
         <button id="moxfield-import-btn" class="btn-import">Import</button>
       </div>
-      <div id="moxfield-status" class="moxfield-status hidden"></div>
+      <div id="moxfield-status" class="moxfield-status hidden" role="status" aria-live="polite"></div>
 
       <div class="divider"><span>or paste your decklist</span></div>
 
@@ -132,6 +145,7 @@
       </div>
 
       <button id="submit-btn" class="btn-primary" disabled>Analyze Deck</button>
+      <div id="input-status" class="input-status" role="status" aria-live="polite"></div>
     </section>
 
     <!-- Loading State -->
@@ -148,20 +162,21 @@
 
       <!-- Commander Header -->
       <div id="commander-header" class="commander-header"></div>
+      <div id="result-summary" class="result-summary" aria-label="Review summary"></div>
 
       <!-- Tab Navigation -->
-      <nav class="tab-nav">
-        <button class="tab-btn active" data-tab="overview">Overview</button>
-        <button class="tab-btn" data-tab="plan">Plan</button>
-        <button class="tab-btn" data-tab="validation">Validation</button>
-        <button class="tab-btn" data-tab="synergy">Synergy</button>
-        <button class="tab-btn" data-tab="bracket">Bracket</button>
-        <button class="tab-btn" data-tab="ai">Analysis</button>
-        <button class="tab-btn" data-tab="cards">Card List</button>
+      <nav class="tab-nav" role="tablist" aria-label="Review sections">
+        <button id="tab-btn-overview" class="tab-btn active" data-tab="overview" role="tab" aria-selected="true" aria-controls="tab-overview" tabindex="0">Overview <span class="tab-badge hidden"></span></button>
+        <button id="tab-btn-plan" class="tab-btn" data-tab="plan" role="tab" aria-selected="false" aria-controls="tab-plan" tabindex="-1">Plan <span class="tab-badge hidden"></span></button>
+        <button id="tab-btn-validation" class="tab-btn" data-tab="validation" role="tab" aria-selected="false" aria-controls="tab-validation" tabindex="-1">Validation <span class="tab-badge hidden"></span></button>
+        <button id="tab-btn-synergy" class="tab-btn" data-tab="synergy" role="tab" aria-selected="false" aria-controls="tab-synergy" tabindex="-1">Synergy <span class="tab-badge hidden"></span></button>
+        <button id="tab-btn-bracket" class="tab-btn" data-tab="bracket" role="tab" aria-selected="false" aria-controls="tab-bracket" tabindex="-1">Bracket <span class="tab-badge hidden"></span></button>
+        <button id="tab-btn-ai" class="tab-btn" data-tab="ai" role="tab" aria-selected="false" aria-controls="tab-ai" tabindex="-1">Analysis <span class="tab-badge hidden"></span></button>
+        <button id="tab-btn-cards" class="tab-btn" data-tab="cards" role="tab" aria-selected="false" aria-controls="tab-cards" tabindex="-1">Card List <span class="tab-badge hidden"></span></button>
       </nav>
 
       <!-- Overview Tab -->
-      <div id="tab-overview" class="tab-content active">
+      <div id="tab-overview" class="tab-content active" role="tabpanel" aria-labelledby="tab-btn-overview">
         <div class="grid-3">
           <div class="stat-card">
             <div class="stat-label">Total Cards</div>
@@ -196,35 +211,35 @@
           <div id="role-bars" class="role-bars"></div>
         </div>
 
-        <div class="panel-inner" id="warnings-panel" style="display:none">
-          <h3>&#9888; Deck Warnings</h3>
+        <div class="panel-inner hidden" id="warnings-panel">
+          <h3>Deck Warnings</h3>
           <ul id="warnings-list" class="warn-list"></ul>
         </div>
       </div>
 
       <!-- Plan Tab -->
-      <div id="tab-plan" class="tab-content hidden">
+      <div id="tab-plan" class="tab-content hidden" role="tabpanel" aria-labelledby="tab-btn-plan">
 
-        <div class="panel-inner" style="margin-bottom:16px">
+        <div class="panel-inner panel-block">
           <h3>Path to Victory</h3>
           <div id="plan-ptv"></div>
         </div>
 
-        <div class="panel-inner" style="margin-bottom:16px">
+        <div class="panel-inner panel-block">
           <h3>Commander Role</h3>
-          <div id="plan-cmd-roles" class="tag-cloud" style="margin-bottom:10px"></div>
+          <div id="plan-cmd-roles" class="tag-cloud plan-role-targets"></div>
           <p id="plan-focus-advice" class="plan-advice"></p>
-          <div id="plan-focus-cards" class="tag-cloud" style="margin-top:8px"></div>
+          <div id="plan-focus-cards" class="tag-cloud plan-focus-cards"></div>
         </div>
 
-        <div class="panel-inner" style="margin-bottom:16px">
+        <div class="panel-inner panel-block">
           <h3>Framework Coverage</h3>
           <p class="plan-framework-note">Target: Lands 38 · Card Advantage 12 · Ramp 12 · Removal 12 · Mass Disruption 6 · Plan Cards 30<br>
-          <span style="color:var(--text3);font-size:.78rem">Cards can fill multiple categories — overlap between 8–10 cards is intentional and compresses your 110 raw-target slots into 100.</span></p>
+          <span class="muted-small">Cards can fill multiple categories. Overlap between 8–10 cards is intentional and compresses your 110 raw-target slots into 100.</span></p>
           <div id="plan-coverage" class="coverage-grid"></div>
         </div>
 
-        <div class="grid-2" style="margin-bottom:16px">
+        <div class="grid-2 panel-block">
           <div class="panel-inner">
             <h3>CMC Curve vs Target</h3>
             <div id="plan-curve-chart" class="dual-bar-chart"></div>
@@ -233,11 +248,11 @@
           <div class="panel-inner">
             <h3>5–7 Turn Playtest Simulation</h3>
             <div id="plan-playtest-table" class="playtest-table-wrap"></div>
-            <div id="plan-playtest-notes" class="plan-notes-list" style="margin-top:10px"></div>
+            <div id="plan-playtest-notes" class="plan-notes-list notes-offset"></div>
           </div>
         </div>
 
-        <div class="grid-2" style="margin-bottom:16px">
+        <div class="grid-2 panel-block">
           <div class="panel-inner">
             <h3>Mulligan Guide</h3>
             <div id="plan-mulligan"></div>
@@ -249,9 +264,11 @@
         </div>
 
         <div class="panel-inner">
-          <h3>Card Role Map <span style="color:var(--text3);font-weight:400;font-size:.78rem">(overlap cards highlighted)</span></h3>
-          <div class="card-filter-row" style="margin-bottom:10px">
+          <h3>Card Role Map <span class="heading-note">(overlap cards highlighted)</span></h3>
+          <div class="card-filter-row compact-filter-row">
+            <label class="sr-only" for="role-card-filter">Filter role map cards</label>
             <input type="text" id="role-card-filter" placeholder="Filter cards…" />
+            <label class="sr-only" for="role-cat-filter">Filter role map by category</label>
             <select id="role-cat-filter">
               <option value="">All Categories</option>
               <option value="Lands">Lands</option>
@@ -282,22 +299,22 @@
       </div>
 
       <!-- Validation Tab -->
-      <div id="tab-validation" class="tab-content hidden">
+      <div id="tab-validation" class="tab-content hidden" role="tabpanel" aria-labelledby="tab-btn-validation">
         <div id="validation-status" class="validation-status"></div>
         <div class="grid-2">
           <div class="panel-inner">
-            <h3>&#10006; Errors</h3>
+            <h3>Errors</h3>
             <ul id="error-list" class="issue-list error-list"></ul>
           </div>
           <div class="panel-inner">
-            <h3>&#9888; Warnings</h3>
+            <h3>Warnings</h3>
             <ul id="warning-list" class="issue-list warn-list"></ul>
           </div>
         </div>
       </div>
 
       <!-- Synergy Tab -->
-      <div id="tab-synergy" class="tab-content hidden">
+      <div id="tab-synergy" class="tab-content hidden" role="tabpanel" aria-labelledby="tab-btn-synergy">
         <div id="synergy-clusters" class="cluster-grid"></div>
         <div class="panel-inner" id="staples-panel">
           <h3>Suggested Staples You Might Be Missing</h3>
@@ -306,8 +323,12 @@
       </div>
 
       <!-- Bracket Tab -->
-      <div id="tab-bracket" class="tab-content hidden">
+      <div id="tab-bracket" class="tab-content hidden" role="tabpanel" aria-labelledby="tab-btn-bracket">
         <div id="bracket-display" class="bracket-display"></div>
+        <div id="bracket-reasoning" class="bracket-reasoning panel-inner hidden">
+          <h3>Analysis Reasoning</h3>
+          <div id="bracket-reasoning-list"></div>
+        </div>
         <div class="panel-inner">
           <h3>Game Changer Cards in Your Deck</h3>
           <div id="gc-list" class="tag-cloud"></div>
@@ -315,14 +336,16 @@
       </div>
 
       <!-- Advisor Tab -->
-      <div id="tab-ai" class="tab-content hidden">
+      <div id="tab-ai" class="tab-content hidden" role="tabpanel" aria-labelledby="tab-btn-ai">
         <div id="ai-content" class="ai-panel"></div>
       </div>
 
       <!-- Card List Tab -->
-      <div id="tab-cards" class="tab-content hidden">
+      <div id="tab-cards" class="tab-content hidden" role="tabpanel" aria-labelledby="tab-btn-cards">
         <div class="card-filter-row">
+          <label class="sr-only" for="card-filter">Filter card list</label>
           <input type="text" id="card-filter" placeholder="Filter cards…" />
+          <label class="sr-only" for="type-filter">Filter card list by type</label>
           <select id="type-filter">
             <option value="">All Types</option>
             <option value="Creature">Creatures</option>

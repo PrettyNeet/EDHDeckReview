@@ -11,6 +11,8 @@ let _appConfig = { auth_enabled: false, data_updates_enabled: true };
 let _supabaseClient = null;
 let _session = null;
 let _authMode = 'sign-in';
+let _statusTimer = null;
+let _confirmResolve = null;
 
 // Per-table sort state (mutated in place by initTableSort)
 const _cardSort       = { col: 'name',    dir: 1  };
@@ -33,6 +35,73 @@ const BUDGET_TIERS = {
 };
 const MAX_DECKLIST_FILE_BYTES = 512 * 1024;
 const ALLOWED_DECKLIST_MIME_TYPES = new Set(['', 'text/plain', 'text/markdown', 'application/octet-stream']);
+
+function showAppStatus(message, kind = '', { persist = false } = {}) {
+  const el = document.getElementById('app-status');
+  if (!el) return;
+  if (_statusTimer) {
+    clearTimeout(_statusTimer);
+    _statusTimer = null;
+  }
+  el.textContent = message || '';
+  el.className = `app-status ${kind}`.trim();
+  el.classList.toggle('hidden', !message);
+  if (message && !persist) {
+    _statusTimer = setTimeout(() => el.classList.add('hidden'), 4200);
+  }
+}
+
+function showMoxfieldStatus(message, kind = '') {
+  const el = document.getElementById('moxfield-status');
+  if (!el) return;
+  el.className = `moxfield-status ${kind ? `moxfield-${kind}` : ''}`.trim();
+  el.textContent = message || '';
+  el.classList.toggle('hidden', !message);
+}
+
+function requestConfirm({ title = 'Confirm Action', message = '', confirmText = 'Continue' } = {}) {
+  const overlay = document.getElementById('confirm-overlay');
+  const titleEl = document.getElementById('confirm-title');
+  const messageEl = document.getElementById('confirm-message');
+  const okBtn = document.getElementById('confirm-ok-btn');
+  const cancelBtn = document.getElementById('confirm-cancel-btn');
+  if (!overlay || !okBtn || !cancelBtn) return Promise.resolve(false);
+
+  titleEl.textContent = title;
+  messageEl.textContent = message;
+  okBtn.textContent = confirmText;
+  overlay.classList.remove('hidden');
+  okBtn.focus();
+
+  return new Promise(resolve => {
+    _confirmResolve = value => {
+      overlay.classList.add('hidden');
+      _confirmResolve = null;
+      resolve(value);
+    };
+  });
+}
+
+function updateInputReadiness() {
+  const status = document.getElementById('input-status');
+  if (!status) return;
+
+  const hasDeck = Boolean(document.getElementById('paste-input')?.value.trim() || selectedFile);
+  const indexReady = !document.getElementById('submit-btn')?.disabled;
+  const bracket = document.getElementById('bracket-select')?.value || 'Auto';
+  const budget = document.getElementById('budget-tier-select')?.selectedOptions?.[0]?.textContent || 'No limit';
+  const aiEnabled = featureEnabled('ai_review');
+  const skipAi = document.getElementById('skip-ai-check')?.checked;
+  const aiState = aiEnabled ? (skipAi ? 'AI skipped' : 'AI enabled') : 'AI disabled';
+
+  status.innerHTML = `
+    <span class="readiness-chip ${hasDeck ? 'ok' : 'warn'}">${hasDeck ? 'Decklist ready' : 'Decklist needed'}</span>
+    <span class="readiness-chip ${indexReady ? 'ok' : 'warn'}">${indexReady ? 'Index ready' : 'Index checking'}</span>
+    <span class="readiness-chip">Bracket: ${escapeHtml(bracket)}</span>
+    <span class="readiness-chip">Budget: ${escapeHtml(budget)}</span>
+    <span class="readiness-chip">${escapeHtml(aiState)}</span>
+  `;
+}
 
 async function apiFetch(url, options = {}) {
   const headers = new Headers(options.headers || {});
@@ -138,6 +207,7 @@ function applyFeatureFlags() {
   document.querySelectorAll('.ai-feature').forEach(el => {
     el.classList.toggle('hidden', !aiEnabled);
   });
+  updateInputReadiness();
 }
 
 async function loadAppConfig() {
@@ -624,7 +694,7 @@ function renderTargetRoleTags() {
         </div>
       `;
       }).join('')
-    : '<span style="color:var(--text3);font-size:.85rem">No custom roles added.</span>';
+    : '<span class="soft-empty">No custom roles added.</span>';
 
   el.querySelectorAll('.role-remove-btn').forEach(btn => {
     btn.addEventListener('click', () => {
@@ -773,6 +843,7 @@ async function buildIndex() {
 
 function enableSubmit() {
   document.getElementById('submit-btn').disabled = false;
+  updateInputReadiness();
 }
 
 // ── Data update flow ──────────────────────────────────────────────────────────
@@ -780,23 +851,24 @@ let _pollInterval = null;
 
 document.getElementById('update-data-btn').addEventListener('click', async () => {
   if (!_appConfig.data_updates_enabled) return;
-  const confirmed = confirm(
-    'This will download the latest Scryfall card database (~500 MB) and rebuild the card index.\n\n' +
-    'The server will remain usable during the download. Continue?'
-  );
+  const confirmed = await requestConfirm({
+    title: 'Update Scryfall Data',
+    message: 'This downloads the latest Scryfall card database, about 500 MB, and rebuilds the card index. The server remains usable during the download.',
+    confirmText: 'Update Data',
+  });
   if (!confirmed) return;
 
   try {
     const r = await apiFetch('/api/bulk-data/update', { method: 'POST' });
     if (!r.ok) {
       const err = await r.json();
-      alert(`Could not start update: ${err.detail || r.statusText}`);
+      showAppStatus(`Could not start update: ${err.detail || r.statusText}`, 'error', { persist: true });
       return;
     }
     showDownloadOverlay();
     startPollingProgress();
   } catch (e) {
-    alert(`Network error: ${e.message}`);
+    showAppStatus(`Network error: ${e.message}`, 'error', { persist: true });
   }
 });
 
@@ -853,14 +925,15 @@ function startPollingProgress() {
 // ── Moxfield import ───────────────────────────────────────────────────────────
 document.getElementById('moxfield-import-btn').addEventListener('click', async () => {
   const url = document.getElementById('moxfield-url').value.trim();
-  if (!url) { alert('Paste a Moxfield deck URL first.'); return; }
+  if (!url) {
+    showMoxfieldStatus('Paste a Moxfield deck URL first.', 'err');
+    return;
+  }
 
   const btn = document.getElementById('moxfield-import-btn');
-  const statusEl = document.getElementById('moxfield-status');
   btn.disabled = true;
   btn.textContent = 'Importing…';
-  statusEl.className = 'moxfield-status';
-  statusEl.textContent = '';
+  showMoxfieldStatus('');
 
   try {
     const r = await apiFetch(`/api/moxfield?url=${encodeURIComponent(url)}`);
@@ -871,13 +944,10 @@ document.getElementById('moxfield-import-btn').addEventListener('click', async (
     if (data.commander) {
       document.getElementById('commander-input').value = data.commander;
     }
-    statusEl.className = 'moxfield-status moxfield-ok';
-    statusEl.textContent = `Imported: ${data.deck_name || 'deck'}`;
-    statusEl.classList.remove('hidden');
+    updateInputReadiness();
+    showMoxfieldStatus(`Imported: ${data.deck_name || 'deck'}`, 'ok');
   } catch (err) {
-    statusEl.className = 'moxfield-status moxfield-err';
-    statusEl.textContent = `Import failed: ${err.message}`;
-    statusEl.classList.remove('hidden');
+    showMoxfieldStatus(`Import failed: ${err.message}`, 'err');
   } finally {
     btn.disabled = false;
     btn.textContent = 'Import';
@@ -926,12 +996,15 @@ function handleFile(f) {
     selectedFile = null;
     fileInput.value = '';
     resetDropZone();
-    alert(validationError);
+    showAppStatus(validationError, 'error', { persist: true });
+    updateInputReadiness();
     return;
   }
 
   selectedFile = f;
-  dropZone.innerHTML = `<div class="drop-icon">✅</div><p><strong>${f.name}</strong> selected (${(f.size/1024).toFixed(1)} KB)</p>`;
+  dropZone.innerHTML = `<div class="drop-icon">OK</div><p><strong>${escapeHtml(f.name)}</strong> selected (${(f.size/1024).toFixed(1)} KB)</p>`;
+  showAppStatus(`${f.name} selected. Decklist preview loaded below.`, 'ok');
+  updateInputReadiness();
   // Also read text into paste area for preview
   const reader = new FileReader();
   reader.onload = e => {
@@ -940,16 +1013,19 @@ function handleFile(f) {
       selectedFile = null;
       fileInput.value = '';
       resetDropZone();
-      alert('The selected file does not look like plain text.');
+      showAppStatus('The selected file does not look like plain text.', 'error', { persist: true });
+      updateInputReadiness();
       return;
     }
     document.getElementById('paste-input').value = value;
+    updateInputReadiness();
   };
   reader.onerror = () => {
     selectedFile = null;
     fileInput.value = '';
     resetDropZone();
-    alert('Could not read the selected file.');
+    showAppStatus('Could not read the selected file.', 'error', { persist: true });
+    updateInputReadiness();
   };
   reader.readAsText(f);
 }
@@ -958,10 +1034,15 @@ function showUploadPanel({ clearResults = false } = {}) {
   document.getElementById('loading-panel').classList.add('hidden');
   document.getElementById('results-panel').classList.add('hidden');
   document.getElementById('upload-panel').classList.remove('hidden');
+  showAppStatus('');
   if (clearResults) {
     currentAnalysis = null;
     allCards = [];
+    updateTabBadges({});
+    document.getElementById('result-summary').innerHTML = '';
+    document.getElementById('commander-header').innerHTML = '';
   }
+  updateInputReadiness();
   window.scrollTo({ top: 0, behavior: 'smooth' });
 }
 
@@ -983,7 +1064,7 @@ async function submitDeck() {
   const hasTargetRoleEditor = Boolean(document.getElementById('target-role-tags'));
 
   if (!text && !selectedFile) {
-    alert('Please provide a decklist (file or paste).');
+    showAppStatus('Provide a decklist by pasting text, importing from Moxfield, or selecting a .txt file.', 'error', { persist: true });
     return;
   }
 
@@ -1017,7 +1098,7 @@ async function submitDeck() {
     renderResults(data);
   } catch (err) {
     hideLoading();
-    alert(`Error: ${err.message}`);
+    showAppStatus(`Review failed: ${err.message}`, 'error', { persist: true });
   }
 }
 
@@ -1036,8 +1117,11 @@ function hideLoading() {
 function renderResults(data) {
   document.getElementById('loading-panel').classList.add('hidden');
   document.getElementById('results-panel').classList.remove('hidden');
+  showAppStatus('');
+  setActiveTab('overview', { focus: false });
 
   renderCommanderHeader(data);
+  renderResultSummary(data);
   renderOverview(data);
   renderPlan(data);
   renderValidation(data);
@@ -1045,6 +1129,77 @@ function renderResults(data) {
   renderBracket(data);
   renderAI(data);
   renderCardList(data.cards || []);
+  updateTabBadges(data);
+}
+
+function countEdhrecRecommendations(data) {
+  const deckNames = new Set((data.cards || []).map(c => (c.name || '').toLowerCase()));
+  const edhrec = data.edhrec || {};
+  const all = [...(edhrec.high_synergy_cards || []), ...(edhrec.top_cards || [])];
+  const seen = new Set();
+  return all.filter(card => {
+    const key = String(card.name || '').toLowerCase();
+    if (!key || seen.has(key) || deckNames.has(key)) return false;
+    seen.add(key);
+    return true;
+  }).length;
+}
+
+function getTopCoverageGap(data) {
+  const categories = data.plan?.coverage?.categories || {};
+  const lows = Object.entries(categories)
+    .filter(([, details]) => Number(details.delta || 0) < 0)
+    .sort(([, a], [, b]) => Number(a.delta || 0) - Number(b.delta || 0));
+  if (!lows.length) return { label: 'Coverage', value: 'Targets met', kind: 'ok' };
+  const [name, details] = lows[0];
+  return { label: 'Top Gap', value: `${name} ${details.delta}`, kind: details.status === 'close' ? 'warn' : 'error' };
+}
+
+function renderResultSummary(data) {
+  const el = document.getElementById('result-summary');
+  if (!el) return;
+  const validation = data.validation || {};
+  const errors = validation.errors || [];
+  const warnings = [...(validation.warnings || []), ...(data.synergy_warnings || [])];
+  const bracket = data.bracket?.bracket ? `Bracket ${data.bracket.bracket}` : 'Unknown';
+  const recCount = countEdhrecRecommendations(data);
+  const gap = getTopCoverageGap(data);
+  const aiEnabled = Boolean(data.features?.ai_review ?? featureEnabled('ai_review'));
+  const advisor = data.ai_available ? 'AI ready' : (aiEnabled ? 'Rule/EDHREC only' : 'AI disabled');
+  const items = [
+    { label: 'Legality', value: validation.valid ? 'Commander legal' : `${errors.length} error${errors.length !== 1 ? 's' : ''}`, kind: validation.valid ? 'ok' : 'error' },
+    { label: 'Deck Size', value: `${data.card_count || 0} cards`, kind: (data.card_count === 100 ? 'ok' : 'warn') },
+    { label: 'Power', value: bracket, kind: 'accent' },
+    gap,
+    { label: 'Warnings', value: `${warnings.length} flagged`, kind: warnings.length ? 'warn' : 'ok' },
+    { label: 'Analysis', value: `${recCount} EDHREC adds · ${advisor}`, kind: recCount ? 'accent' : 'ok' },
+  ];
+
+  el.innerHTML = items.map(item => `
+    <div class="summary-item ${item.kind || ''}">
+      <div class="summary-label">${escapeHtml(item.label)}</div>
+      <div class="summary-value">${escapeHtml(item.value)}</div>
+    </div>
+  `).join('');
+}
+
+function updateTabBadge(tab, value) {
+  const btn = document.querySelector(`.tab-btn[data-tab="${tab}"]`);
+  const badge = btn?.querySelector('.tab-badge');
+  if (!badge) return;
+  const show = value != null && value !== '' && Number(value) !== 0;
+  badge.textContent = show ? String(value) : '';
+  badge.classList.toggle('hidden', !show);
+}
+
+function updateTabBadges(data) {
+  const validation = data.validation || {};
+  const issueCount = (validation.errors || []).length + (validation.warnings || []).length;
+  updateTabBadge('validation', issueCount);
+  updateTabBadge('synergy', (data.synergy_clusters || []).length);
+  updateTabBadge('bracket', (data.bracket?.game_changer_cards || []).length);
+  updateTabBadge('ai', countEdhrecRecommendations(data) + ((data.ai_suggestions || []).length));
+  updateTabBadge('cards', (data.cards || []).length);
 }
 
 // ── Commander Header ──────────────────────────────────────────────────────────
@@ -1120,7 +1275,7 @@ function renderCommanderHeader(data) {
     ? renderCardLink(data.commander, { className: 'commander-name-link' })
     : 'Unknown Commander';
   const partner = data.partner
-    ? ` <span style="color:var(--text2)">+</span> ${renderCardLink(data.partner, { className: 'commander-name-link' })}`
+    ? ` <span class="muted-inline">+</span> ${renderCardLink(data.partner, { className: 'commander-name-link' })}`
     : '';
   const bracketNum = data.bracket?.bracket;
   const bracketLabel = data.bracket?.label;
@@ -1141,7 +1296,7 @@ function renderOverview(data) {
   document.getElementById('stat-cmc').textContent = data.avg_cmc || '—';
 
   const ci = (data.color_identity || []).map(colorPip).join('');
-  document.getElementById('stat-colors').innerHTML = ci || '<span style="color:var(--text3)">Colorless</span>';
+  document.getElementById('stat-colors').innerHTML = ci || '<span class="soft-empty">Colorless</span>';
 
   renderManaCurve(data.mana_curve || {});
   renderTypeDonut(data.type_breakdown || {});
@@ -1154,9 +1309,9 @@ function renderOverview(data) {
   const wl = document.getElementById('warnings-list');
   if (allWarnings.length) {
     wl.innerHTML = allWarnings.map(w => `<li>${linkKnownCardNames(w)}</li>`).join('');
-    wp.style.display = '';
+    wp.classList.remove('hidden');
   } else {
-    wp.style.display = 'none';
+    wp.classList.add('hidden');
   }
 }
 
@@ -1326,7 +1481,7 @@ function renderPlan(data) {
   document.getElementById('plan-focus-advice').textContent = _focusText;
   document.getElementById('plan-focus-cards').innerHTML = _focusCards.length
     ? _focusCards.map(c =>
-        `<a class="tag focus-card-link" href="${c.url}" target="_blank" rel="noopener">${c.name} ↗</a>`
+        `<a class="tag focus-card-link" href="${escapeHtml(c.url || getCardUrl(c.name))}" target="_blank" rel="noopener">${escapeHtml(c.name)} ↗</a>`
       ).join('')
     : '';
 
@@ -1384,7 +1539,7 @@ function renderPlan(data) {
     const tarH = Math.round((d.target / maxVal) * 100);
     return `
       <div class="dual-bar-wrap">
-        <div class="bar-count" style="font-size:.65rem;color:var(--text3)">${d.actual}</div>
+        <div class="bar-count muted-count">${d.actual}</div>
         <div class="dual-bars" style="height:${Math.max(actH,tarH)}%">
           <div class="bar-actual" style="height:${actH > 0 ? (actH/(Math.max(actH,tarH)||1))*100 : 2}%"></div>
           <div class="bar-target" style="height:${tarH > 0 ? (tarH/(Math.max(actH,tarH)||1))*100 : 2}%"></div>
@@ -1394,6 +1549,7 @@ function renderPlan(data) {
     `;
   }).join('');
 
+  chartEl.parentElement.querySelector('.dual-legend')?.remove();
   chartEl.insertAdjacentHTML('afterend', `
     <div class="dual-legend">
       <span><div class="legend-sq" style="background:var(--accent)"></div>Actual</span>
@@ -1463,7 +1619,7 @@ function renderPlan(data) {
     <div class="mulligan-section">
       <div class="mulligan-label">Priority engine pieces</div>
       <div class="mulligan-hand">
-        ${(mull.engine_pieces || []).map(n => renderCardLink(n, { className: 'hand-card' })).join('') || '<span style="color:var(--text3)">None detected</span>'}
+        ${(mull.engine_pieces || []).map(n => renderCardLink(n, { className: 'hand-card' })).join('') || '<span class="soft-empty">None detected</span>'}
       </div>
     </div>
   `;
@@ -1573,7 +1729,7 @@ function decklistLineForRoleRow(row) {
 async function copyCardRoleView() {
   const rows = _cardRoleCurrentView.length ? _cardRoleCurrentView : getFilteredCardRoleRows(_cmcMapCache);
   if (!rows.length) {
-    alert('No cards match the current Card Role Map filters.');
+    showAppStatus('No cards match the current Card Role Map filters.', 'warn');
     return;
   }
 
@@ -1590,6 +1746,7 @@ async function copyCardRoleView() {
   try {
     await navigator.clipboard.writeText(text);
     btn.textContent = 'Copied';
+    showAppStatus('Current Card Role Map view copied to clipboard.', 'ok');
     setTimeout(() => { btn.textContent = originalText; }, 1400);
   } catch {
     const textarea = document.createElement('textarea');
@@ -1603,11 +1760,12 @@ async function copyCardRoleView() {
     textarea.remove();
 
     if (!copied) {
-      alert('Could not copy the current Card Role Map view to clipboard.');
+      showAppStatus('Could not copy the current Card Role Map view to clipboard.', 'error', { persist: true });
       return;
     }
 
     btn.textContent = 'Copied';
+    showAppStatus('Current Card Role Map view copied to clipboard.', 'ok');
     setTimeout(() => { btn.textContent = originalText; }, 1400);
   }
 }
@@ -1623,21 +1781,21 @@ function renderValidation(data) {
   const status = document.getElementById('validation-status');
   if (v.valid) {
     status.className = 'validation-status valid-ok';
-    status.innerHTML = '✅ Deck is valid and Commander-legal.';
+    status.textContent = 'Deck is valid and Commander-legal.';
   } else {
     status.className = 'validation-status valid-fail';
-    status.innerHTML = `❌ ${errors.length} error${errors.length !== 1 ? 's' : ''} found — deck may not be legal.`;
+    status.textContent = `${errors.length} error${errors.length !== 1 ? 's' : ''} found. Deck may not be legal.`;
   }
 
   const el = document.getElementById('error-list');
   el.innerHTML = errors.length
     ? errors.map(e => `<li>${linkKnownCardNames(e)}</li>`).join('')
-    : '<p class="empty-note">No errors. ✓</p>';
+    : '<p class="empty-note">No errors.</p>';
 
   const wl = document.getElementById('warning-list');
   wl.innerHTML = warnings.length
     ? warnings.map(w => `<li>${linkKnownCardNames(w)}</li>`).join('')
-    : '<p class="empty-note">No warnings. ✓</p>';
+    : '<p class="empty-note">No warnings.</p>';
 }
 
 // ── Synergy Tab ───────────────────────────────────────────────────────────────
@@ -1655,12 +1813,12 @@ function renderSynergy(data) {
         <div class="cluster-tags">${(c.cards || []).map(n => renderCardLink(n, { className: 'cluster-tag' })).join('')}</div>
       </div>
     `).join('')
-    : '<p style="color:var(--text3);padding:20px">No strong synergy clusters detected.</p>';
+    : '<p class="soft-empty-block">No strong synergy clusters detected.</p>';
 
   const staples = data.missing_staples || [];
   document.getElementById('missing-staples').innerHTML = staples.length
     ? staples.map(s => renderCardLink(s, { className: 'tag' })).join('')
-    : '<span style="color:var(--text3);font-size:.85rem">None flagged — great staple coverage!</span>';
+    : '<span class="soft-empty">None flagged. Staple coverage looks good.</span>';
 }
 
 // ── Bracket Tab ───────────────────────────────────────────────────────────────
@@ -1680,19 +1838,20 @@ function renderBracket(data) {
     </div>
   `).join('');
 
+  const reasoningWrap = document.getElementById('bracket-reasoning');
+  const reasoningList = document.getElementById('bracket-reasoning-list');
   if (b.reasoning && b.reasoning.length) {
-    el.insertAdjacentHTML('afterend', `
-      <div class="bracket-reasoning panel-inner">
-        <h3>Analysis Reasoning</h3>
-        ${b.reasoning.map(r => `<div class="reasoning-item">${linkKnownCardNames(r)}</div>`).join('')}
-      </div>
-    `);
+    reasoningList.innerHTML = b.reasoning.map(r => `<div class="reasoning-item">${linkKnownCardNames(r)}</div>`).join('');
+    reasoningWrap.classList.remove('hidden');
+  } else {
+    reasoningList.innerHTML = '';
+    reasoningWrap.classList.add('hidden');
   }
 
   const gcCards = b.game_changer_cards || [];
   document.getElementById('gc-list').innerHTML = gcCards.length
     ? gcCards.map(n => renderCardLink(n, { className: 'tag gc-tag', label: `★ ${n}` })).join('')
-    : '<span style="color:var(--text3);font-size:.85rem">No game-changer cards found.</span>';
+    : '<span class="soft-empty">No game-changer cards found.</span>';
 }
 
 // ── AI Tab ────────────────────────────────────────────────────────────────────
@@ -1713,15 +1872,15 @@ function renderAI(data) {
       ${creativityHtml}
       ${edhrecHtml}
       ${!edhrec.available ? `
-        <div class="panel-inner" style="margin-top:14px">
+        <div class="panel-inner panel-block">
           <h3>EDHREC Recommendations</h3>
-          <p style="color:var(--text2);font-size:.82rem">
+          <p class="muted-copy">
             EDHREC data is unavailable for this commander right now${edhrec.error ? `: ${escapeHtml(edhrec.error)}` : '.'}
           </p>
         </div>
       ` : ''}
       ${sug.length ? `
-        <div class="panel-inner" style="margin-top:14px">
+        <div class="panel-inner panel-block">
           <h3>Rule-Based Suggestions</h3>
           <div class="suggestion-list">
             ${renderSuggestionList(sug)}
@@ -1729,17 +1888,17 @@ function renderAI(data) {
         </div>
       ` : ''}
       ${!aiEnabled && edhrec.available ? `
-        <div class="panel-inner" style="margin-top:14px">
+        <div class="panel-inner panel-block">
           <h3>AI Review Disabled</h3>
-          <p style="color:var(--text2);font-size:.82rem">
+          <p class="muted-copy">
             Model-backed recommendations are disabled for this deployment. EDHREC and creativity analysis are still shown here.
           </p>
         </div>
       ` : ''}
       ${aiEnabled && !edhrec.available ? `
-        <div class="ai-unavailable" style="margin-top:14px">
-          <p>&#129302; AI advisor is offline.</p>
-          <p style="margin-top:8px;font-size:.82rem">Set <code>ANTHROPIC_API_KEY</code>, <code>OPENAI_API_KEY</code>, or choose <code>Ollama</code> with a local model.</p>
+        <div class="ai-unavailable panel-block">
+          <p>AI advisor is offline.</p>
+          <p class="mt-small">Set <code>ANTHROPIC_API_KEY</code>, <code>OPENAI_API_KEY</code>, or choose <code>Ollama</code> with a local model.</p>
         </div>
       ` : ''}
     `;
@@ -1755,9 +1914,9 @@ function renderAI(data) {
       ${renderAdvisorSections(data, advisorCardNames)}
     </div>
     ${data.ai_full_response ? `
-      <details style="margin-top:12px">
-        <summary style="color:var(--text2);cursor:pointer;font-size:.82rem">Full AI response</summary>
-        <pre style="background:var(--bg3);padding:14px;border-radius:6px;font-size:.78rem;white-space:pre-wrap;margin-top:8px">${escapeHtml(data.ai_full_response)}</pre>
+      <details class="advisor-raw-response">
+        <summary>Full AI response</summary>
+        <pre>${escapeHtml(data.ai_full_response)}</pre>
       </details>
     ` : ''}
     ${edhrecHtml}
@@ -1776,7 +1935,7 @@ function renderEdhrecRows(cards, inDeck) {
     const roleHtml = (c.plan_roles || []).map(r => {
       const cls = 'role-' + r.replace(/ /g, '-');
       return `<span class="role-tag ${cls}">${EDHREC_ROLE_ABBR[r] || r}</span>`;
-    }).join('') || '<span style="color:var(--text3)">—</span>';
+    }).join('') || '<span class="soft-empty">—</span>';
     return `
       <tr class="${inDeck ? 'edhrec-row-in-deck' : ''}">
         <td>${renderCardLink(c.name, { url: c.scryfall_uri || '' })}${inDeck ? ' <span class="edhrec-in-deck-badge">✓</span>' : ''}</td>
@@ -1798,15 +1957,15 @@ function _creativityCardRows(cards) {
     const roleHtml = (card.plan_roles || []).map(r => {
       const cls = 'role-' + r.replace(/ /g, '-');
       return `<span class="role-tag ${cls}">${EDHREC_ROLE_ABBR[r] || r}</span>`;
-    }).join('') || '<span style="color:var(--text3)">—</span>';
+    }).join('') || '<span class="soft-empty">—</span>';
 
     const subHtml = card.plan_subcategory
       ? `<span class="creativity-subcategory">${escapeHtml(card.plan_subcategory)}</span>`
-      : '<span style="color:var(--text3)">—</span>';
+      : '<span class="soft-empty">—</span>';
 
     const cmc = card.cmc != null ? Number(card.cmc) : null;
     const cmcHtml = cmc != null ? String(Number.isInteger(cmc) ? cmc : cmc) : '—';
-    const ciHtml  = (card.color_identity || []).map(colorPip).join('') || '<span style="color:var(--text3)">—</span>';
+    const ciHtml  = (card.color_identity || []).map(colorPip).join('') || '<span class="soft-empty">—</span>';
 
     return `
       <tr>
@@ -1862,11 +2021,11 @@ function renderCreativityScore(data) {
 
   const uniqueContent = _creativityUnique.length
     ? `<div class="creativity-table-wrap"><table class="creativity-table" id="creativity-unique-table">${tableHeader}<tbody id="creativity-unique-tbody">${_creativityCardRows(sortedUnique)}</tbody></table></div>`
-    : '<p style="color:var(--text3);font-size:.82rem;padding:10px 12px">None — deck closely follows the average build.</p>';
+    : '<p class="soft-empty padded-empty">None. Deck closely follows the average build.</p>';
 
   const skippedContent = _creativitySkipped.length
     ? `<div class="creativity-table-wrap"><table class="creativity-table" id="creativity-skipped-table">${tableHeader}<tbody id="creativity-skipped-tbody">${_creativityCardRows(sortedSkipped)}</tbody></table></div>`
-    : '<p style="color:var(--text3);font-size:.82rem;padding:10px 12px">You run all common average-deck staples.</p>';
+    : '<p class="soft-empty padded-empty">You run all common average-deck staples.</p>';
 
   return `
     <div class="panel-inner creativity-panel">
@@ -1882,11 +2041,11 @@ function renderCreativityScore(data) {
           </div>
         </div>
       </div>
-      <details class="creativity-details" style="margin-top:12px">
+      <details class="creativity-details creativity-details-primary">
         <summary class="creativity-summary">Your Original Picks (${_creativityUnique.length})</summary>
         ${uniqueContent}
       </details>
-      <details class="creativity-details" style="margin-top:8px">
+      <details class="creativity-details details-content">
         <summary class="creativity-summary">Average Staples You Skipped (${_creativitySkipped.length})</summary>
         ${skippedContent}
       </details>
@@ -1921,7 +2080,7 @@ function buildEdhrecSection(edhrec, deckNames) {
   </tr>`;
 
   return `
-    <div class="panel-inner edhrec-panel" style="margin-top:14px">
+    <div class="panel-inner edhrec-panel panel-block">
       <h3>
         &#9733; EDHREC Recommendations
         <a href="${edhrec.url}" target="_blank" class="edhrec-link">View on EDHREC ↗</a>
@@ -1933,7 +2092,7 @@ function buildEdhrecSection(edhrec, deckNames) {
         </div>
       ` : ''}
       ${_edhrecMissing.length === 0 && _edhrecIncluded.length === 0
-        ? `<p style="color:var(--text3);font-size:.83rem">${
+        ? `<p class="soft-empty">${
             hiddenForBudget
               ? 'No EDHREC recommendations remain inside the selected budget.'
               : 'No EDHREC data available for this commander.'
@@ -1949,9 +2108,9 @@ function buildEdhrecSection(edhrec, deckNames) {
         </div>
       ` : ''}
       ${_edhrecIncluded.length ? `
-        <details style="margin-top:10px">
+        <details class="details-offset">
           <summary class="edhrec-already-have">You already run ${_edhrecIncluded.length} EDHREC-recommended card${_edhrecIncluded.length !== 1 ? 's' : ''} ▸</summary>
-          <div class="edhrec-table-wrap" style="margin-top:8px">
+          <div class="edhrec-table-wrap details-content">
             <table class="edhrec-table" id="edhrec-included-table">
               <thead>${thRow}</thead>
               <tbody id="edhrec-included-tbody">${renderEdhrecRows(_edhrecIncluded, true)}</tbody>
@@ -2028,24 +2187,24 @@ function filterCards() {
   tbody.innerHTML = filtered.map(c => {
     if (!c.found) {
       return `<tr class="not-found-row">
-        <td>${c.quantity}</td>
-        <td colspan="7">⚠ ${c.raw_name} — not found in database</td>
+        <td>${escapeHtml(c.quantity)}</td>
+        <td colspan="7">${escapeHtml(c.raw_name)} - not found in database</td>
       </tr>`;
     }
     const ci = (c.color_identity || []).map(colorPip).join('');
     const pt = (c.power && c.toughness) ? `${c.power}/${c.toughness}` : (c.defense ? `[${c.defense}]` : '—');
     const rarityClass = { common:'rarity-c', uncommon:'rarity-u', rare:'rarity-r', mythic:'rarity-m' }[c.rarity] || '';
     const link = c.scryfall_uri
-      ? `<a class="card-name-link" href="${c.scryfall_uri}" target="_blank">${c.name}</a>`
-      : c.name;
+      ? `<a class="card-name-link" href="${escapeHtml(c.scryfall_uri)}" target="_blank" rel="noopener">${escapeHtml(c.name)}</a>`
+      : escapeHtml(c.name);
     return `<tr>
-      <td>${c.quantity}</td>
-      <td>${link} ${c.is_commander ? '👑' : ''}</td>
-      <td>${c.type_line || '—'}</td>
-      <td>${c.cmc !== null && c.cmc !== undefined ? c.cmc : '—'}</td>
+      <td>${escapeHtml(c.quantity)}</td>
+      <td>${link} ${c.is_commander ? '<span class="commander-mark">Commander</span>' : ''}</td>
+      <td>${escapeHtml(c.type_line || '—')}</td>
+      <td>${escapeHtml(c.cmc !== null && c.cmc !== undefined ? c.cmc : '—')}</td>
       <td>${ci || '—'}</td>
-      <td>${pt}</td>
-      <td class="${rarityClass}">${(c.rarity || '').charAt(0).toUpperCase()}</td>
+      <td>${escapeHtml(pt)}</td>
+      <td class="${rarityClass}">${escapeHtml((c.rarity || '').charAt(0).toUpperCase())}</td>
       <td>${c.game_changer ? '<span class="gc-dot">★</span>' : ''}</td>
     </tr>`;
   }).join('');
@@ -2054,14 +2213,39 @@ function filterCards() {
 document.getElementById('card-filter').addEventListener('input', filterCards);
 document.getElementById('type-filter').addEventListener('change', filterCards);
 
+['paste-input', 'bracket-select', 'budget-tier-select', 'ai-provider-select', 'ai-model-input', 'skip-ai-check'].forEach(id => {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.addEventListener(el.type === 'checkbox' || el.tagName === 'SELECT' ? 'change' : 'input', updateInputReadiness);
+});
+
 // ── Tab switching ─────────────────────────────────────────────────────────────
-document.querySelectorAll('.tab-btn').forEach(btn => {
-  btn.addEventListener('click', () => {
-    document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
-    document.querySelectorAll('.tab-content').forEach(t => t.classList.add('hidden'));
-    btn.classList.add('active');
-    const tab = btn.dataset.tab;
-    document.getElementById(`tab-${tab}`).classList.remove('hidden');
+function setActiveTab(tab, { focus = true } = {}) {
+  document.querySelectorAll('.tab-btn').forEach(btn => {
+    const active = btn.dataset.tab === tab;
+    btn.classList.toggle('active', active);
+    btn.setAttribute('aria-selected', active ? 'true' : 'false');
+    btn.tabIndex = active ? 0 : -1;
+    if (active && focus) btn.focus();
+  });
+  document.querySelectorAll('.tab-content').forEach(panel => {
+    const active = panel.id === `tab-${tab}`;
+    panel.classList.toggle('hidden', !active);
+  });
+}
+
+document.querySelectorAll('.tab-btn').forEach((btn, index, buttons) => {
+  btn.addEventListener('click', () => setActiveTab(btn.dataset.tab));
+  btn.addEventListener('keydown', event => {
+    const key = event.key;
+    if (!['ArrowRight', 'ArrowLeft', 'Home', 'End'].includes(key)) return;
+    event.preventDefault();
+    let nextIndex = index;
+    if (key === 'ArrowRight') nextIndex = (index + 1) % buttons.length;
+    if (key === 'ArrowLeft') nextIndex = (index - 1 + buttons.length) % buttons.length;
+    if (key === 'Home') nextIndex = 0;
+    if (key === 'End') nextIndex = buttons.length - 1;
+    setActiveTab(buttons[nextIndex].dataset.tab);
   });
 });
 
@@ -2163,6 +2347,22 @@ document.getElementById('sign-out-btn')?.addEventListener('click', async () => {
   _session = null;
   startAuthenticatedApp.started = false;
   updateAuthShell();
+});
+
+document.getElementById('confirm-ok-btn')?.addEventListener('click', () => {
+  if (_confirmResolve) _confirmResolve(true);
+});
+
+document.getElementById('confirm-cancel-btn')?.addEventListener('click', () => {
+  if (_confirmResolve) _confirmResolve(false);
+});
+
+document.getElementById('confirm-overlay')?.addEventListener('click', event => {
+  if (event.target.id === 'confirm-overlay' && _confirmResolve) _confirmResolve(false);
+});
+
+document.addEventListener('keydown', event => {
+  if (event.key === 'Escape' && _confirmResolve) _confirmResolve(false);
 });
 
 // ── Init ──────────────────────────────────────────────────────────────────────

@@ -178,6 +178,8 @@ Split cards use the full double-sided name or either half:
 
 File uploads are validated in the browser and backend. Uploaded deck files must be plain `.txt`, non-empty, under 512 KB, and not binary.
 
+The submit panel shows readiness chips for decklist presence, card-index readiness, intended bracket, budget target, and AI state. Import, upload, submit, copy, and data-update feedback is shown in the app instead of browser alert dialogs.
+
 ### Results tabs
 
 | Tab | Contents |
@@ -192,11 +194,13 @@ File uploads are validated in the browser and backend. Uploaded deck files must 
 
 The commander header shows enriched commander and partner card details when available: linked name, colorized mana cost, type line, mana value, stats/defense, rarity, keywords, and oracle text. Named cards throughout the results are intended to be clickable Scryfall links without changing the surrounding layout.
 
+Below the commander header, the result summary band shows legality, deck size, computed bracket, the largest framework coverage gap, warning count, and Analysis availability. The results tab navigation is sticky, keyboard-accessible, and includes badges for actionable counts.
+
 The Plan tab includes target controls for iteration. Users can add/remove commander role tags and change the planned bracket, then re-run the analysis so focus advice and AI suggestions aim at that target.
 
 The Plan tab also links card names in the 5–7 turn simulation notes, sequencing guide, mulligan guide, and role-map sections. The Card Role Map's `Export View` button copies the current filtered/sorted rows to the clipboard in the same plain-text decklist format accepted by import and paste flows, including `Commander:` tags when the commander is included in the view. The Analysis tab's EDHREC tables include `Synergy`, `Inclusion`, `Decks`, `Price`, role chips, and budget-aware filtering. Price prefers EDHREC's TCGplayer value when present and otherwise falls back to the local Scryfall index.
 
-The results view includes a `New Deck Review` button that returns to the submission panel without a full page reload.
+The results view includes a `New Deck Review` button that returns to the submission panel without a full page reload. Each completed review resets the active tab to Overview and updates generated Plan/Bracket UI in place so repeated reviews do not duplicate legends or reasoning panels.
 
 ---
 

@@ -36,6 +36,8 @@ Vercel entrypoint: [index.py](../index.py)
 - Review inputs: validated `.txt` file upload, pasted text, or Moxfield URL
 - Review inputs also include intended bracket, budget target, optional AI provider/model when enabled, and optional commander-role targets
 - Review outputs: overview, plan analysis, validation, synergy, bracket, Analysis, full card list
+- Submit page shows inline readiness chips for decklist presence, index readiness, bracket, budget, and AI state; workflow feedback uses in-app status regions instead of browser alerts.
+- Results view includes a commander header, compact summary band, sticky ARIA tab navigation, and tab badges for actionable counts.
 - Bracket system is `1–5`, not `1–4`
 - File uploads save JSON into `results/` locally only; Vercel returns JSON without writing results
 - Results view has a `New Deck Review` button that returns to the submission page
@@ -77,6 +79,8 @@ Vercel entrypoint: [index.py](../index.py)
 - Visible card names should generally be Scryfall links. Current coverage includes commander header details, Synergy, Bracket, AI suggestions, EDHREC rows, Plan role/map sections, and Card List.
 - EDHREC table metric columns (`Synergy`, `Inclusion`, `Decks`, `Price`) are centered in the UI.
 - Bulk-data refresh writes progress to `cache/download_progress.json` and the frontend polls it.
+- Bulk-data update confirmation uses an in-app confirmation dialog; download progress remains a modal overlay with live status text.
+- Results tabs reset to Overview on each completed review. Generated Plan legends and Bracket reasoning are updated in place to avoid duplicate UI after re-renders.
 - Creativity score diffs the user's deck (non-commander, non-basic-land cards) against the EDHREC average deck for that commander, producing a 0–100 score with labels: Stock Build / Tuned / Refined / Innovative / Brewer. Displayed in the Analysis tab. Response field `creativity` is `null` if EDHREC has no average deck for that commander.
 - Otag-based classification uses `cache/otag_index.json` (built by `python build_otag_index.py`). When present, `classify_role()` in `synergy.py` and `assign_roles()` in `plan_analyzer.py` use it as the primary source and fall back to regex for any card not in the index. The app works without it (pure regex mode).
 - Supabase Auth is enabled when configured. Public endpoints are `/`, static assets, `/health`, and `/api/config`; protected API endpoints require a valid Supabase session and an active `public.allowed_users` row.
