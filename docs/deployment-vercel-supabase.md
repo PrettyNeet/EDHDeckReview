@@ -25,6 +25,11 @@ update public.allowed_users set active = false where email = 'old@example.com';
 
 The backend reads this table with `SUPABASE_SERVICE_ROLE_KEY`; do not expose that key in client code.
 
+Invited users still need a Supabase Auth account. In the web app they should choose
+`Create Account`, enter their whitelisted email, and set their password. If Supabase
+email confirmation is enabled, they must confirm the email before signing in. The
+`Forgot password?` flow sends a recovery link and lets them set a replacement password.
+
 ## Vercel environment variables
 
 Set these in the Vercel project:
