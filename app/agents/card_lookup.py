@@ -25,6 +25,8 @@ SCRYFALL_BULK_API = "https://api.scryfall.com/bulk-data"
 BULK_DATA_TYPE   = "default_cards"
 STALE_HOURS      = 24
 _USER_AGENT      = "MTG-DeckReview/1.0 (local tool)"
+SCRYFALL_PAGE_DELAY_SECONDS = 0.25
+SCRYFALL_MAX_RETRIES = 5
 
 CARD_FIELDS = [
     "name", "cmc", "color_identity", "colors", "defense", "keywords",
@@ -295,17 +297,7 @@ def build_otag_index(force: bool = False) -> Path:
         page = 0
         while url:
             page += 1
-            req = urllib.request.Request(
-                url,
-                headers={"User-Agent": _USER_AGENT, "Accept": "application/json"},
-            )
-            try:
-                with urllib.request.urlopen(req, timeout=15) as resp:
-                    data = json.loads(resp.read().decode("utf-8"))
-            except urllib.error.HTTPError as exc:
-                if exc.code == 404:
-                    break  # tag returned no results — not fatal
-                raise
+            data = _fetch_scryfall_json_with_retries(url)
 
             for card in data.get("data", []):
                 key = _normalize_name(card.get("name", ""))
@@ -316,7 +308,7 @@ def build_otag_index(force: bool = False) -> Path:
                         index[key].append(tag)
 
             url = data.get("next_page") if data.get("has_more") else None
-            time.sleep(0.1)  # respect Scryfall rate limit (~10 req/s)
+            time.sleep(SCRYFALL_PAGE_DELAY_SECONDS)
 
         print(f"  otag:{tag} — done ({page} page{'s' if page != 1 else ''})")
 
@@ -326,6 +318,44 @@ def build_otag_index(force: bool = False) -> Path:
     _OTAG_INDEX = index
     print(f"Otag index built: {len(index):,} entries → {OTAG_INDEX_PATH}")
     return OTAG_INDEX_PATH
+
+
+def _fetch_scryfall_json_with_retries(url: str) -> dict:
+    """Fetch Scryfall JSON with retry/backoff for transient rate limits."""
+    last_error: Exception | None = None
+    for attempt in range(SCRYFALL_MAX_RETRIES + 1):
+        req = urllib.request.Request(
+            url,
+            headers={"User-Agent": _USER_AGENT, "Accept": "application/json"},
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                return json.loads(resp.read().decode("utf-8"))
+        except urllib.error.HTTPError as exc:
+            if exc.code == 404:
+                return {"data": [], "has_more": False}
+            last_error = exc
+            if exc.code != 429 and exc.code < 500:
+                raise
+            retry_after = exc.headers.get("Retry-After")
+            if retry_after:
+                try:
+                    delay = float(retry_after)
+                except ValueError:
+                    delay = 2.0
+            else:
+                delay = min(2 ** attempt, 30)
+            print(f"  Scryfall request limited/failed ({exc.code}); retrying in {delay:.1f}s...")
+            time.sleep(delay)
+        except urllib.error.URLError as exc:
+            last_error = exc
+            delay = min(2 ** attempt, 30)
+            print(f"  Scryfall request failed ({exc.reason}); retrying in {delay:.1f}s...")
+            time.sleep(delay)
+
+    if last_error:
+        raise last_error
+    raise RuntimeError("Scryfall request failed without an exception.")
 
 
 # ─── Bulk data freshness ──────────────────────────────────────────────────────

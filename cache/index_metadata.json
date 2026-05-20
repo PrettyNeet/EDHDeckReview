@@ -1,9 +1,9 @@
 {
-  "generated_at": "2026-05-20T16:31:53.086404+00:00",
-  "scryfall_updated_at": null,
-  "source_filename": null,
+  "generated_at": "2026-05-20T17:29:53.328415+00:00",
+  "scryfall_updated_at": "2026-05-20T09:09:25.985+00:00",
+  "source_filename": "default-cards-20260520090925.json",
   "card_count": 37708,
-  "otag_count": 15396,
-  "card_index_gzip_bytes": 6961251,
-  "otag_index_gzip_bytes": 135004
+  "otag_count": 15453,
+  "card_index_gzip_bytes": 6966997,
+  "otag_index_gzip_bytes": 135646
 }
