@@ -32,7 +32,7 @@ sys.path.insert(0, str(ROOT))
 from app.agents.card_lookup import (
     build_index, lookup, suggest_names,
     check_bulk_data_freshness, fetch_bulk_data_metadata, download_bulk_data,
-    build_otag_index, OTAG_INDEX_PATH,
+    build_otag_index, CARD_INDEX_GZ_PATH, CARD_INDEX_PATH, INDEX_METADATA_PATH, OTAG_INDEX_PATH,
 )
 from app.agents.deck_parser import parse_decklist_text
 from app.agents.validator import validate
@@ -158,7 +158,7 @@ if FRONTEND_DIR.exists():
 
 @app.get("/health")
 async def health():
-    index_ready = (CACHE_DIR / "card_index.json").exists()
+    index_ready = CARD_INDEX_PATH.exists() or CARD_INDEX_GZ_PATH.exists()
     bulk = check_bulk_data_freshness()
     return {
         "status": "ok",
@@ -177,14 +177,21 @@ async def health():
 
 @app.get("/api/index/status")
 async def index_status():
-    cache_path = CACHE_DIR / "card_index.json"
+    cache_path = CARD_INDEX_PATH if CARD_INDEX_PATH.exists() else CARD_INDEX_GZ_PATH
     if cache_path.exists():
         stat = cache_path.stat()
-        return {
+        payload = {
             "ready": True,
             "size_mb": round(stat.st_size / 1_048_576, 1),
             "modified": stat.st_mtime,
+            "compressed": cache_path.suffix == ".gz",
         }
+        if INDEX_METADATA_PATH.exists():
+            try:
+                payload["metadata"] = json.loads(INDEX_METADATA_PATH.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, OSError):
+                pass
+        return payload
     return {"ready": False}
 
 
