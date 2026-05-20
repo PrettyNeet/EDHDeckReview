@@ -20,7 +20,7 @@ import threading
 from pathlib import Path
 from typing import Optional
 
-from fastapi import BackgroundTasks, Depends, FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import BackgroundTasks, Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -44,6 +44,8 @@ from app.agents import edhrec as edhrec_agent
 from app.agents import moxfield as moxfield_agent
 from app.agents.role_catalog import get_role_catalog
 from app.auth import public_config, require_invited_user
+from app.auth import AuthUser
+from app import analytics
 
 CACHE_DIR = ROOT / "cache"
 RESULTS_DIR = ROOT / "results"
@@ -89,6 +91,21 @@ def _feature_flags() -> dict:
     # Keep local behavior unchanged, but default costly AI calls off on Vercel.
     return {
         "ai_review": _feature_enabled("ai_review", default=not IS_VERCEL),
+    }
+
+
+def _index_metadata_summary() -> dict:
+    if not INDEX_METADATA_PATH.exists():
+        return {}
+    try:
+        metadata = json.loads(INDEX_METADATA_PATH.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return {}
+    return {
+        "generated_at": metadata.get("generated_at"),
+        "scryfall_updated_at": metadata.get("scryfall_updated_at"),
+        "card_count": metadata.get("card_count"),
+        "otag_count": metadata.get("otag_count"),
     }
 
 
@@ -152,6 +169,59 @@ def _validate_uploaded_deck_file(file: UploadFile, content: bytes) -> None:
         raise HTTPException(status_code=400, detail="Deck upload is too large. Use a .txt file under 512 KB.")
     if b"\x00" in content[:4096]:
         raise HTTPException(status_code=400, detail="Deck upload does not look like a text file.")
+
+
+def _review_input_metadata(
+    *,
+    decklist_text: str,
+    commander: Optional[str],
+    intended_bracket: Optional[int],
+    skip_ai: bool,
+    ai_provider: Optional[str],
+    ai_model: Optional[str],
+    commander_roles: Optional[list[str]],
+    budget_tier: Optional[dict],
+    filename: Optional[str] = None,
+    content_type: Optional[str] = None,
+) -> dict:
+    return {
+        **analytics.decklist_stats(decklist_text),
+        "filename": filename,
+        "content_type": content_type,
+        "commander_hint": commander,
+        "intended_bracket": intended_bracket,
+        "skip_ai": skip_ai,
+        "ai_provider": ai_provider,
+        "ai_model": ai_model,
+        "commander_roles": commander_roles or [],
+        "budget_tier": (budget_tier or {}).get("tier"),
+    }
+
+
+def _review_result_summary(analysis: dict) -> dict:
+    validation = analysis.get("validation") or {}
+    bracket = analysis.get("bracket") or {}
+    creativity = analysis.get("creativity") or {}
+    edhrec = analysis.get("edhrec") or {}
+    return {
+        "commander": analysis.get("commander"),
+        "partner": analysis.get("partner"),
+        "color_identity": analysis.get("color_identity") or [],
+        "card_count": analysis.get("card_count"),
+        "found_count": analysis.get("found_count"),
+        "validation_valid": validation.get("valid"),
+        "validation_error_count": len(validation.get("errors") or []),
+        "validation_warning_count": len(validation.get("warnings") or []),
+        "bracket": bracket.get("bracket"),
+        "intended_bracket": analysis.get("intended_bracket"),
+        "budget_tier": (analysis.get("budget") or {}).get("tier"),
+        "ai_available": analysis.get("ai_available"),
+        "ai_provider": analysis.get("ai_provider"),
+        "ai_model": analysis.get("ai_model"),
+        "ai_disabled_reason": analysis.get("ai_disabled_reason"),
+        "edhrec_available": edhrec.get("available"),
+        "creativity_score": creativity.get("score"),
+    }
 
 
 FRONTEND_DIR = ROOT / "frontend"
@@ -401,12 +471,72 @@ async def autocomplete(q: str, limit: int = 8, _user=Depends(require_invited_use
 # ─── Moxfield import ──────────────────────────────────────────────────────────
 
 @app.get("/api/moxfield")
-async def import_moxfield(url: str, _user=Depends(require_invited_user)):
+async def import_moxfield(
+    url: str,
+    request: Request,
+    _user: AuthUser = Depends(require_invited_user),
+):
     """Fetch a Moxfield deck URL and convert it to plain-text decklist format."""
-    result = moxfield_agent.fetch_and_convert(url)
-    if result["error"]:
-        raise HTTPException(status_code=400, detail=result["error"])
-    return result
+    request_id = analytics.new_request_id()
+    start_ms = analytics.now_ms()
+    deck_id = moxfield_agent.extract_deck_id(url)
+    analytics.log_event(
+        "moxfield_import_requested",
+        user=_user,
+        request=request,
+        request_id=request_id,
+        source="moxfield",
+        moxfield_url=url,
+        moxfield_deck_id=deck_id,
+    )
+    try:
+        result = moxfield_agent.fetch_and_convert(url)
+        if result["error"]:
+            exc = HTTPException(status_code=400, detail=result["error"])
+            analytics.log_event(
+                "moxfield_import_failed",
+                user=_user,
+                request=request,
+                request_id=request_id,
+                source="moxfield",
+                moxfield_url=url,
+                moxfield_deck_id=deck_id,
+                diagnostics={"duration_ms": analytics.elapsed_ms(start_ms)},
+                error=analytics.safe_error_payload(exc),
+            )
+            raise exc
+        text = result.get("text") or ""
+        analytics.log_event(
+            "moxfield_import_completed",
+            user=_user,
+            request=request,
+            request_id=request_id,
+            source="moxfield",
+            decklist_text=text,
+            moxfield_url=url,
+            moxfield_deck_id=deck_id,
+            moxfield_deck_name=result.get("deck_name"),
+            commander=result.get("commander"),
+            input_metadata=analytics.decklist_stats(text),
+            diagnostics={"duration_ms": analytics.elapsed_ms(start_ms)},
+        )
+        result["request_id"] = request_id
+        return result
+    except HTTPException:
+        raise
+    except Exception as exc:
+        analytics.log_event(
+            "moxfield_import_failed",
+            user=_user,
+            request=request,
+            request_id=request_id,
+            source="moxfield",
+            moxfield_url=url,
+            moxfield_deck_id=deck_id,
+            diagnostics={"duration_ms": analytics.elapsed_ms(start_ms)},
+            error=analytics.safe_error_payload(exc),
+        )
+        raise
 
 
 # ─── Core review pipeline ─────────────────────────────────────────────────────
@@ -420,13 +550,18 @@ def _run_review(
     ai_model: Optional[str] = None,
     commander_roles_override: Optional[list[str]] = None,
     budget_tier: Optional[dict] = None,
+    request_id: Optional[str] = None,
 ) -> dict:
     """Execute the full review pipeline and return the analysis dict."""
     features = _feature_flags()
     ai_review_enabled = features["ai_review"]
+    timings: dict[str, int] = {}
+    total_start = analytics.now_ms()
 
     # 1. Parse + enrich with Scryfall
+    phase_start = analytics.now_ms()
     entries = parse_decklist_text(decklist_text, commander_hint=commander_hint)
+    timings["parse_ms"] = analytics.elapsed_ms(phase_start)
     if not entries:
         raise HTTPException(status_code=400, detail="No cards parsed from the decklist.")
 
@@ -435,29 +570,39 @@ def _run_review(
     partner_name = commanders[1].name if len(commanders) > 1 else None
 
     # 2. Validate
+    phase_start = analytics.now_ms()
     validation_result = validate(entries)
+    timings["validate_ms"] = analytics.elapsed_ms(phase_start)
 
     # 3. Synergy analysis (clusters, type breakdown, mana curve)
+    phase_start = analytics.now_ms()
     synergy_data = synergy_agent.analyze(entries)
+    timings["synergy_ms"] = analytics.elapsed_ms(phase_start)
 
     # 4. Bracket evaluation
+    phase_start = analytics.now_ms()
     bracket_result = bracket_agent.evaluate(entries, intended_bracket=intended_bracket)
+    timings["bracket_ms"] = analytics.elapsed_ms(phase_start)
 
     # 5. Plan analysis (RoughDeckPlan.csv framework)
+    phase_start = analytics.now_ms()
     cmd_color_identity = sorted({c for e in entries if e.is_commander for c in e.color_identity})
     plan_data = plan_analyzer.analyze_plan(
         entries,
         color_identity=cmd_color_identity,
         commander_roles_override=commander_roles_override,
     )
+    timings["plan_ms"] = analytics.elapsed_ms(phase_start)
 
     # 6. EDHREC synergy data (best-effort; non-fatal if unavailable)
     edhrec_data = {"available": False, "high_synergy_cards": [], "top_cards": []}
     if commander_name:
+        phase_start = analytics.now_ms()
         try:
             edhrec_data = edhrec_agent.fetch_commander_synergy(commander_name)
         except Exception:
             pass
+        timings["edhrec_synergy_ms"] = analytics.elapsed_ms(phase_start)
 
     # Enrich each EDHREC card with its plan roles (Lands / Ramp / Card Advantage / …)
     if edhrec_data.get("available"):
@@ -490,6 +635,7 @@ def _run_review(
     # 7. Creativity score vs EDHREC average deck (best-effort; non-fatal)
     creativity_data = None
     if commander_name and edhrec_data.get("available"):
+        phase_start = analytics.now_ms()
         try:
             avg_deck = edhrec_agent.fetch_average_deck(commander_name, bracket=bracket_result.bracket)
             if avg_deck.get("available") and avg_deck.get("card_names"):
@@ -498,6 +644,7 @@ def _run_review(
                     creativity_data["average_deck_url"] = avg_deck["url"]
         except Exception:
             pass
+        timings["creativity_ms"] = analytics.elapsed_ms(phase_start)
 
     # 8. Build unified analysis dict
     found_count = sum(e.quantity for e in entries if e.found)
@@ -531,18 +678,21 @@ def _run_review(
         "ai_provider": None,
         "ai_model": None,
         "features": features,
+        "request_id": request_id,
     }
 
     # 8. AI review (optional)
     if not ai_review_enabled:
         analysis["ai_disabled_reason"] = "AI review is disabled by feature flag."
     elif not skip_ai:
+        phase_start = analytics.now_ms()
         ai_result = ai_advisor.generate_review(
             analysis,
             intended_bracket=intended_bracket,
             provider=ai_provider,
             model=ai_model,
         )
+        timings["ai_ms"] = analytics.elapsed_ms(phase_start)
         analysis["ai_summary"] = ai_result.get("summary")
         analysis["ai_suggestions"] = ai_result.get("suggestions", [])
         analysis["ai_available"] = ai_result.get("available", False)
@@ -551,11 +701,17 @@ def _run_review(
         if "full_response" in ai_result:
             analysis["ai_full_response"] = ai_result["full_response"]
 
+    timings["total_ms"] = analytics.elapsed_ms(total_start)
+    analysis["_diagnostics"] = {
+        "timings": timings,
+        "index_metadata": _index_metadata_summary(),
+    }
     return analysis
 
 
 @app.post("/api/review")
 async def review_from_file(
+    request: Request,
     file: UploadFile = File(...),
     commander: Optional[str] = Form(None),
     intended_bracket: Optional[int] = Form(None),
@@ -564,26 +720,68 @@ async def review_from_file(
     ai_model: Optional[str] = Form(None),
     commander_roles: Optional[str] = Form(None),
     budget_tier: Optional[str] = Form(None),
-    _user=Depends(require_invited_user),
+    _user: AuthUser = Depends(require_invited_user),
 ):
     """Upload a .txt decklist file for full review."""
+    request_id = analytics.new_request_id()
+    route_start = analytics.now_ms()
     content = await file.read()
     _validate_uploaded_deck_file(file, content)
     try:
         text = content.decode("utf-8")
     except UnicodeDecodeError:
         text = content.decode("latin-1")
-
-    analysis = _run_review(
-        text,
-        commander,
-        intended_bracket,
-        skip_ai,
-        ai_provider,
-        ai_model,
-        _parse_optional_commander_roles(commander_roles),
-        _parse_budget_tier(budget_tier),
+    parsed_roles = _parse_optional_commander_roles(commander_roles)
+    parsed_budget = _parse_budget_tier(budget_tier)
+    input_metadata = _review_input_metadata(
+        decklist_text=text,
+        commander=commander,
+        intended_bracket=intended_bracket,
+        skip_ai=skip_ai,
+        ai_provider=ai_provider,
+        ai_model=ai_model,
+        commander_roles=parsed_roles,
+        budget_tier=parsed_budget,
+        filename=file.filename,
+        content_type=file.content_type,
     )
+
+    analytics.log_event(
+        "deck_review_submitted",
+        user=_user,
+        request=request,
+        request_id=request_id,
+        source="upload",
+        decklist_text=text,
+        input_metadata=input_metadata,
+        diagnostics={"features": _feature_flags(), "index_metadata": _index_metadata_summary()},
+    )
+
+    try:
+        analysis = _run_review(
+            text,
+            commander,
+            intended_bracket,
+            skip_ai,
+            ai_provider,
+            ai_model,
+            parsed_roles,
+            parsed_budget,
+            request_id=request_id,
+        )
+    except Exception as exc:
+        analytics.log_event(
+            "deck_review_failed",
+            user=_user,
+            request=request,
+            request_id=request_id,
+            source="upload",
+            decklist_text=text,
+            input_metadata=input_metadata,
+            diagnostics={"route_duration_ms": analytics.elapsed_ms(route_start)},
+            error=analytics.safe_error_payload(exc),
+        )
+        raise
 
     if not IS_VERCEL:
         safe_name = (file.filename or "deck").replace(" ", "_").replace(".txt", "")
@@ -591,11 +789,28 @@ async def review_from_file(
         out_path.write_text(json.dumps(analysis, ensure_ascii=False, indent=2), encoding="utf-8")
         analysis["saved_to"] = str(out_path)
 
+    diagnostics = analysis.pop("_diagnostics", {})
+    diagnostics["route_duration_ms"] = analytics.elapsed_ms(route_start)
+    analytics.log_event(
+        "deck_review_completed",
+        user=_user,
+        request=request,
+        request_id=request_id,
+        source="upload",
+        decklist_text=text,
+        commander=analysis.get("commander"),
+        card_count=analysis.get("card_count"),
+        input_metadata=input_metadata,
+        result_summary=_review_result_summary(analysis),
+        diagnostics=diagnostics,
+    )
+
     return JSONResponse(content=analysis)
 
 
 @app.post("/api/review/text")
 async def review_from_text(
+    request: Request,
     decklist: str = Form(...),
     commander: Optional[str] = Form(None),
     intended_bracket: Optional[int] = Form(None),
@@ -604,17 +819,73 @@ async def review_from_text(
     ai_model: Optional[str] = Form(None),
     commander_roles: Optional[str] = Form(None),
     budget_tier: Optional[str] = Form(None),
-    _user=Depends(require_invited_user),
+    _user: AuthUser = Depends(require_invited_user),
 ):
     """Submit a decklist as raw text for full review."""
-    analysis = _run_review(
-        decklist,
-        commander,
-        intended_bracket,
-        skip_ai,
-        ai_provider,
-        ai_model,
-        _parse_optional_commander_roles(commander_roles),
-        _parse_budget_tier(budget_tier),
+    request_id = analytics.new_request_id()
+    route_start = analytics.now_ms()
+    parsed_roles = _parse_optional_commander_roles(commander_roles)
+    parsed_budget = _parse_budget_tier(budget_tier)
+    input_metadata = _review_input_metadata(
+        decklist_text=decklist,
+        commander=commander,
+        intended_bracket=intended_bracket,
+        skip_ai=skip_ai,
+        ai_provider=ai_provider,
+        ai_model=ai_model,
+        commander_roles=parsed_roles,
+        budget_tier=parsed_budget,
+    )
+    analytics.log_event(
+        "deck_review_submitted",
+        user=_user,
+        request=request,
+        request_id=request_id,
+        source="text",
+        decklist_text=decklist,
+        input_metadata=input_metadata,
+        diagnostics={"features": _feature_flags(), "index_metadata": _index_metadata_summary()},
+    )
+
+    try:
+        analysis = _run_review(
+            decklist,
+            commander,
+            intended_bracket,
+            skip_ai,
+            ai_provider,
+            ai_model,
+            parsed_roles,
+            parsed_budget,
+            request_id=request_id,
+        )
+    except Exception as exc:
+        analytics.log_event(
+            "deck_review_failed",
+            user=_user,
+            request=request,
+            request_id=request_id,
+            source="text",
+            decklist_text=decklist,
+            input_metadata=input_metadata,
+            diagnostics={"route_duration_ms": analytics.elapsed_ms(route_start)},
+            error=analytics.safe_error_payload(exc),
+        )
+        raise
+
+    diagnostics = analysis.pop("_diagnostics", {})
+    diagnostics["route_duration_ms"] = analytics.elapsed_ms(route_start)
+    analytics.log_event(
+        "deck_review_completed",
+        user=_user,
+        request=request,
+        request_id=request_id,
+        source="text",
+        decklist_text=decklist,
+        commander=analysis.get("commander"),
+        card_count=analysis.get("card_count"),
+        input_metadata=input_metadata,
+        result_summary=_review_result_summary(analysis),
+        diagnostics=diagnostics,
     )
     return JSONResponse(content=analysis)

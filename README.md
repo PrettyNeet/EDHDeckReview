@@ -32,7 +32,7 @@ python run.py
 
 Open **http://localhost:8000** in your browser.
 
-For hosted deployment with Vercel and Supabase invite auth, see
+For hosted deployment with Vercel, compressed deploy caches, feature flags, and Supabase invite auth, see
 [docs/deployment-vercel-supabase.md](docs/deployment-vercel-supabase.md).
 
 ### 4. Configure an AI provider (optional)
@@ -51,13 +51,13 @@ OLLAMA_BASE_URL=http://localhost:11434
 OLLAMA_MODEL=llama3.1:8b
 ```
 
-The server loads `.env` automatically on startup. Without a configured provider the Advisor tab falls back to rule-based suggestions.
+The server loads `.env` automatically on startup. AI review can also be disabled without removing code by setting `FEATURE_AI_REVIEW_ENABLED=false`; the Analysis tab still shows EDHREC and creativity data.
 
 ---
 
 ## Running fully local with Ollama
 
-Ollama lets you run the Advisor with no API key or internet requirement after the initial model download.
+Ollama lets you run model-backed Analysis recommendations with no API key or internet requirement after the initial model download.
 
 ### Install Ollama
 
@@ -96,9 +96,34 @@ Then start the server normally:
 python run.py
 ```
 
-The Advisor tab will show which provider handled the review (`ollama / llama3.1:8b`). Larger models produce noticeably better cut/add recommendations; 7–8B models are usable but may miss subtle synergy nuances.
+The Analysis tab will show which provider handled the model review (`ollama / llama3.1:8b`). Larger models produce noticeably better cut/add recommendations; 7–8B models are usable but may miss subtle synergy nuances.
 
 **WSL note:** if Ollama is running on the Windows host and the app is running inside WSL, replace `localhost` with the Windows host IP (usually `172.x.x.1`) or use `host.docker.internal` if running in Docker. If both are in the same WSL instance, `http://localhost:11434` works as-is.
+
+---
+
+## Feature Flags
+
+Feature flags are read from environment variables, returned through `/api/config`, and enforced server-side.
+
+| Variable | Local default | Vercel default | Effect |
+|---|---:|---:|---|
+| `FEATURE_AI_REVIEW_ENABLED` | `true` | `false` | Shows AI provider/model controls and allows Anthropic/OpenAI/Ollama calls |
+
+When AI review is disabled, the model code remains in the repo but cannot be invoked by the web app or a crafted review request. EDHREC recommendations and creativity analysis still appear in the Analysis tab.
+
+---
+
+## Action Logging
+
+Hosted deployments can write durable Supabase analytics rows to `public.user_action_logs`.
+Run [docs/supabase-action-logging.sql](docs/supabase-action-logging.sql), then set
+`ACTION_LOGGING_ENABLED=true`.
+
+Logged events include Moxfield imports and deck review submissions, completions, and
+failures. Logs include authenticated user identity, request ID, selected options, full
+submitted decklist text, Moxfield URL/deck metadata when present, summarized review
+results, and timing diagnostics. Logging failures are non-fatal and do not block reviews.
 
 ---
 
@@ -147,9 +172,11 @@ Split cards use the full double-sided name or either half:
 | File upload / paste | Drag-and-drop a `.txt` file or paste directly into the text area |
 | Commander override | Force a specific card to be treated as the commander |
 | Intended Bracket | Your self-assessed power level (1–5); mismatches are flagged |
-| Budget Target | Applies a per-card recommendation cap so Advisor / EDHREC suggestions fit the deck's price band |
-| Advisor Provider / Model | Choose Auto, Anthropic, OpenAI, or Ollama and optionally override the model for that review |
-| Skip AI review | Skips the model API call for a faster response |
+| Budget Target | Applies a per-card recommendation cap so AI / EDHREC suggestions fit the deck's price band |
+| AI Provider / Model | Choose Auto, Anthropic, OpenAI, or Ollama when `FEATURE_AI_REVIEW_ENABLED=true` |
+| Skip AI review | Skips the model API call for a faster response when AI review is enabled |
+
+File uploads are validated in the browser and backend. Uploaded deck files must be plain `.txt`, non-empty, under 512 KB, and not binary.
 
 ### Results tabs
 
@@ -160,14 +187,16 @@ Split cards use the full double-sided name or either half:
 | **Validation** | Pass/fail status, full list of errors and warnings |
 | **Synergy** | Detected synergy clusters with strength ratings, missing staple suggestions |
 | **Bracket** | Visual bracket indicator (1–5), reasoning notes, list of game-changer cards |
-| **Advisor** | Model-generated or rule-based deck summary, validated cut/add recommendations informed by plan coverage gaps, and EDHREC recommendations with role and price data when available |
+| **Analysis** | EDHREC recommendations, creativity score, and model-generated/rule-based recommendations when AI review is enabled |
 | **Card List** | Full enriched card table — filterable by name and type, sortable, links to Scryfall |
 
 The commander header shows enriched commander and partner card details when available: linked name, colorized mana cost, type line, mana value, stats/defense, rarity, keywords, and oracle text. Named cards throughout the results are intended to be clickable Scryfall links without changing the surrounding layout.
 
-The Plan tab includes target controls for iteration. Users can add/remove commander role tags and change the planned bracket, then re-run the analysis so focus advice and Advisor suggestions aim at that target.
+The Plan tab includes target controls for iteration. Users can add/remove commander role tags and change the planned bracket, then re-run the analysis so focus advice and AI suggestions aim at that target.
 
-The Plan tab also links card names in the 5–7 turn simulation notes, sequencing guide, mulligan guide, and role-map sections. The Card Role Map's `Export View` button copies the current filtered/sorted rows to the clipboard in the same plain-text decklist format accepted by import and paste flows, including `Commander:` tags when the commander is included in the view. The Advisor tab's EDHREC tables include `Synergy`, `Inclusion`, `Decks`, `Price`, role chips, and budget-aware filtering. Price prefers EDHREC's TCGplayer value when present and otherwise falls back to the local Scryfall index.
+The Plan tab also links card names in the 5–7 turn simulation notes, sequencing guide, mulligan guide, and role-map sections. The Card Role Map's `Export View` button copies the current filtered/sorted rows to the clipboard in the same plain-text decklist format accepted by import and paste flows, including `Commander:` tags when the commander is included in the view. The Analysis tab's EDHREC tables include `Synergy`, `Inclusion`, `Decks`, `Price`, role chips, and budget-aware filtering. Price prefers EDHREC's TCGplayer value when present and otherwise falls back to the local Scryfall index.
+
+The results view includes a `New Deck Review` button that returns to the submission panel without a full page reload.
 
 ---
 
@@ -178,6 +207,7 @@ All endpoints are served at `http://localhost:8000`.
 | Method | Path | Description |
 |---|---|---|
 | `GET` | `/` | Web UI |
+| `GET` | `/api/config` | Public frontend config, auth state, update availability, and feature flags |
 | `GET` | `/health` | Server status, index readiness, and bulk data age |
 | `GET` | `/api/index/status` | Index file size and build time |
 | `POST` | `/api/index/build?force=true` | (Re)build the card index |
@@ -191,6 +221,10 @@ All endpoints are served at `http://localhost:8000`.
 | `POST` | `/api/review` | Full review from uploaded `.txt` file (multipart form) |
 | `POST` | `/api/review/text` | Full review from raw text body (form field `decklist`) |
 
+When Supabase invite auth is enabled, `/api/config`, `/health`, `/`, and static frontend assets are public. User-facing API routes require a Supabase access token and an active `public.allowed_users` row.
+
+When action logging is enabled, `/api/moxfield`, `/api/review`, and `/api/review/text` write best-effort `user_action_logs` rows with full submitted decklist text.
+
 ### `/api/review` form fields
 
 | Field | Type | Required | Description |
@@ -199,10 +233,12 @@ All endpoints are served at `http://localhost:8000`.
 | `commander` | string | No | Override commander detection |
 | `intended_bracket` | int (1–5) | No | Player's declared bracket |
 | `budget_tier` | string | No | `budget`, `moderate`, `upgraded`, or `premium` |
-| `commander_roles` | JSON array or comma string | No | User target commander role tags for Plan/Advisor analysis |
+| `commander_roles` | JSON array or comma string | No | User target commander role tags for Plan/Analysis behavior |
 | `ai_provider` | string | No | `auto`, `anthropic`, `openai`, or `ollama` |
 | `ai_model` | string | No | Per-review model override |
 | `skip_ai` | bool | No | Skip model API call |
+
+Uploaded files must be plain `.txt`, non-empty, under 512 KB, and text-like. Invalid uploads return `400`.
 
 ### Response shape
 
