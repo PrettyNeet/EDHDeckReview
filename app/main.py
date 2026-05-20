@@ -50,6 +50,13 @@ RESULTS_DIR = ROOT / "results"
 IS_VERCEL = bool(os.environ.get("VERCEL"))
 if not IS_VERCEL:
     RESULTS_DIR.mkdir(exist_ok=True)
+MAX_DECKLIST_UPLOAD_BYTES = 512 * 1024
+ALLOWED_DECKLIST_CONTENT_TYPES = {
+    "",
+    "text/plain",
+    "text/markdown",
+    "application/octet-stream",
+}
 
 BUDGET_TIERS = {
     "budget": {"label": "Budget", "max_card_price": 5.0},
@@ -128,6 +135,23 @@ def _parse_tcgplayer_price(card_data: Optional[dict]) -> Optional[float]:
     except (TypeError, ValueError):
         return None
     return round(parsed, 2) if parsed > 0 else None
+
+
+def _validate_uploaded_deck_file(file: UploadFile, content: bytes) -> None:
+    filename = (file.filename or "").strip()
+    suffix = Path(filename).suffix.lower()
+    content_type = (file.content_type or "").split(";", 1)[0].strip().lower()
+
+    if suffix and suffix != ".txt":
+        raise HTTPException(status_code=400, detail="Deck upload must be a .txt file.")
+    if content_type not in ALLOWED_DECKLIST_CONTENT_TYPES:
+        raise HTTPException(status_code=400, detail="Deck upload must be a plain text file.")
+    if not content:
+        raise HTTPException(status_code=400, detail="Deck upload is empty.")
+    if len(content) > MAX_DECKLIST_UPLOAD_BYTES:
+        raise HTTPException(status_code=400, detail="Deck upload is too large. Use a .txt file under 512 KB.")
+    if b"\x00" in content[:4096]:
+        raise HTTPException(status_code=400, detail="Deck upload does not look like a text file.")
 
 
 FRONTEND_DIR = ROOT / "frontend"
@@ -544,6 +568,7 @@ async def review_from_file(
 ):
     """Upload a .txt decklist file for full review."""
     content = await file.read()
+    _validate_uploaded_deck_file(file, content)
     try:
         text = content.decode("utf-8")
     except UnicodeDecodeError:
