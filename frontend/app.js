@@ -4,6 +4,7 @@
 let currentAnalysis = null;
 let allCards = [];
 let _targetCommanderRoles = [];
+let _detectedCommanderRoleNames = new Set();
 let _commanderRoleCatalog = { themes: [], typals: [] };
 let _commanderRoleByName = new Map();
 let _appConfig = { auth_enabled: false, data_updates_enabled: true };
@@ -249,12 +250,12 @@ function initTableSort(tableEl, sortState, onSort) {
 // ── Color helpers ─────────────────────────────────────────────────────────────
 const COLOR_MAP = { W: '#fef9c3', U: '#3b82f6', B: '#9333ea', R: '#ef4444', G: '#22c55e' };
 const TYPE_COLORS = {
-  Creatures: '#7c6af7', Instants: '#60a5fa', Sorceries: '#a78bfa',
+  Creatures: '#c8a44a', Instants: '#60a5fa', Sorceries: '#e4c068',
   Artifacts: '#94a3b8', Enchantments: '#4ade80', Planeswalkers: '#fb923c', Lands: '#78716c',
 };
 const ROLE_COLORS = {
   ramp: '#4ade80', draw: '#60a5fa', removal: '#f87171', boardwipes: '#fb923c',
-  tutors: '#a78bfa', threats: '#fbbf24', synergy: '#7c6af7', lands: '#78716c',
+  tutors: '#e4c068', threats: '#fbbf24', synergy: '#c8a44a', lands: '#78716c',
 };
 
 function colorPip(c) {
@@ -605,8 +606,9 @@ function renderTargetRoleTags() {
   const el = document.getElementById('target-role-tags');
   if (!el) return;
 
-  const roles = getTargetCommanderRoles();
-  el.innerHTML = roles.length
+  const allRoles = getTargetCommanderRoles();
+  const roles = allRoles.filter(r => !_detectedCommanderRoleNames.has(r.toLowerCase()));
+  el.innerHTML = roles.length // eslint-disable-line -- content is escapeHtml-sanitized below
     ? roles.map((role, index) => {
         const meta = getCommanderRoleMeta(role);
         const kind = meta?.kind === 'typal' ? 'Typal' : (meta?.kind === 'theme' ? 'Theme' : 'Custom');
@@ -616,17 +618,19 @@ function renderTargetRoleTags() {
           <div class="role-tag-main">
             <span>${escapeHtml(role)}</span>
             <span class="role-kind">${kind}</span>
-            <button type="button" class="role-remove-btn" data-role-index="${index}" aria-label="Remove ${escapeHtml(role)}">&times;</button>
+            <button type="button" class="role-remove-btn" data-role-name="${escapeHtml(role)}" aria-label="Remove ${escapeHtml(role)}">&times;</button>
           </div>
           <div class="role-tag-description">${escapeHtml(description)}</div>
         </div>
       `;
       }).join('')
-    : '<span style="color:var(--text3);font-size:.85rem">No target roles set.</span>';
+    : '<span style="color:var(--text3);font-size:.85rem">No custom roles added.</span>';
 
   el.querySelectorAll('.role-remove-btn').forEach(btn => {
     btn.addEventListener('click', () => {
-      _targetCommanderRoles.splice(Number(btn.dataset.roleIndex), 1);
+      const name = btn.dataset.roleName.toLowerCase();
+      const idx = _targetCommanderRoles.findIndex(r => r.toLowerCase() === name);
+      if (idx !== -1) _targetCommanderRoles.splice(idx, 1);
       renderTargetRoleTags();
     });
   });
@@ -1214,7 +1218,7 @@ function renderRoleBars(roles) {
   const max = Math.max(...entries.map(([,v]) => v), 1);
   el.innerHTML = entries.map(([role, count]) => {
     const pct = Math.round((count / max) * 100);
-    const color = ROLE_COLORS[role] || '#7c6af7';
+    const color = ROLE_COLORS[role] || '#c8a44a';
     return `<div class="role-row">
       <div class="role-label">${role}</div>
       <div class="role-bar-bg"><div class="role-bar-fill" style="width:${pct}%;background:${color}"></div></div>
@@ -1230,7 +1234,7 @@ const COVERAGE_COLORS = {
   'Ramp':            '#4ade80',
   'Removal':         '#f87171',
   'Mass Disruption': '#fb923c',
-  'Plan Cards':      '#a78bfa',
+  'Plan Cards':      '#c8a44a',
 };
 
 function renderPlan(data) {
@@ -1242,6 +1246,7 @@ function renderPlan(data) {
   const detectedMatches = plan.detected_commander_role_matches || [];
   const roleSource = plan.commander_roles_source || 'detected';
   _targetCommanderRoles = [...roles.filter(Boolean)];
+  _detectedCommanderRoleNames = new Set(detectedMatches.map(m => m.name.toLowerCase()));
   const plannedBracket = data.intended_bracket || document.getElementById('bracket-select').value || '';
   document.getElementById('bracket-select').value = plannedBracket;
   const detectedHtml = detectedMatches.length
@@ -1253,7 +1258,10 @@ function renderPlan(data) {
           <div class="detected-role-item">
             <div class="detected-role-head">
               <span>${escapeHtml(match.name)}</span>
-              <span>${escapeHtml(kind)} · ${escapeHtml(confidence)}</span>
+              <div class="detected-role-head-right">
+                <span>${escapeHtml(kind)} · ${escapeHtml(confidence)}</span>
+                <button type="button" class="detected-role-remove-btn" data-role-name="${escapeHtml(match.name)}" aria-label="Remove ${escapeHtml(match.name)}">&times;</button>
+              </div>
             </div>
             <div class="detected-role-desc">${escapeHtml(match.description || '')}</div>
             ${evidence ? `<div class="detected-role-evidence">${escapeHtml(evidence)}</div>` : ''}
@@ -1296,6 +1304,21 @@ function renderPlan(data) {
   `;
   renderTargetRoleTags();
   bindTargetControls();
+  document.getElementById('plan-cmd-roles')
+    .querySelectorAll('.detected-role-remove-btn')
+    .forEach(btn => {
+      btn.addEventListener('click', e => {
+        e.stopPropagation();
+        const roleName = btn.dataset.roleName;
+        const idx = _targetCommanderRoles.findIndex(r => r.toLowerCase() === roleName.toLowerCase());
+        if (idx !== -1) {
+          _targetCommanderRoles.splice(idx, 1);
+          renderTargetRoleTags();
+        }
+        btn.closest('.detected-role-item').classList.add('detected-role-removed');
+        btn.disabled = true;
+      });
+    });
   const _focusRaw = plan.commander_focus_advice || {};
   const _focusText  = typeof _focusRaw === 'string' ? _focusRaw : (_focusRaw.text || '');
   const _focusCards = typeof _focusRaw === 'object' && !Array.isArray(_focusRaw)
@@ -1331,7 +1354,7 @@ function renderPlan(data) {
   const covEl = document.getElementById('plan-coverage');
   covEl.innerHTML = Object.entries(cats).map(([cat, d]) => {
     const pct = Math.min(d.pct, 100);
-    const color = COVERAGE_COLORS[cat] || '#7c6af7';
+    const color = COVERAGE_COLORS[cat] || '#c8a44a';
     const deltaClass = d.status === 'ok' ? 'delta-ok' : (d.status === 'close' ? 'delta-close' : 'delta-low');
     const deltaSign = d.delta >= 0 ? '+' : '';
     return `

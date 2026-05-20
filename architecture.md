@@ -8,8 +8,12 @@ This document describes every file's purpose, structure, key functions, and the 
 
 ```
 DeckReview/
+├── index.py                   Vercel FastAPI entrypoint
+├── vercel.json                Vercel rewrite to index.py
 ├── app/
 │   ├── main.py                   FastAPI app, API routes, review pipeline
+│   ├── auth.py                   Supabase session + invite whitelist dependency
+│   ├── analytics.py              Best-effort Supabase action logging
 │   ├── models/
 │   │   └── card.py               All dataclasses (CardEntry, ValidationResult, etc.)
 │   └── agents/
@@ -19,7 +23,7 @@ DeckReview/
 │       ├── synergy.py            Role bars, mana curve, synergy clusters, missing staples
 │       ├── bracket.py            Power bracket 1–5 assignment
 │       ├── plan_analyzer.py      RoughDeckPlan framework evaluation
-│       ├── ai_advisor.py         Anthropic/OpenAI/Ollama integration (Advisor review)
+│       ├── ai_advisor.py         Anthropic/OpenAI/Ollama integration (feature-flagged AI review)
 │       ├── edhrec.py             EDHREC JSON scraper
 │       └── moxfield.py           Moxfield URL → decklist text
 ├── frontend/
@@ -29,7 +33,10 @@ DeckReview/
 ├── Scryfall src/
 │   └── default-cards-*.json     Raw Scryfall bulk data (~500 MB JSON, gitignored)
 ├── cache/
-│   └── card_index.json           Compiled name-keyed card lookup cache (~37k entries)
+│   ├── card_index.json           Local compiled name-keyed card lookup cache (~37k entries)
+│   ├── card_index.json.gz        Compressed deploy cache used on Vercel
+│   ├── otag_index.json.gz        Compressed otag deploy cache used on Vercel
+│   └── index_metadata.json       Deploy cache generation metadata
 ├── results/                      Saved review JSON outputs (per-submission)
 ├── decks/                        Sample .txt decklists for testing
 ├── RoughDeckPlan.csv             Source data for the plan framework targets
@@ -59,15 +66,30 @@ POST /api/review  (or /api/review/text)
   ├─ edhrec.fetch_commander_synergy()       →  high_synergy_cards, top_cards
   │    └─ card_lookup.lookup() per card        (enriches with plan_roles)
   └─ ai_advisor.generate_review()           →  ai_summary, ai_suggestions
-       (optional, skippable)
+       (optional; skipped when requested or FEATURE_AI_REVIEW_ENABLED=false)
   │
   ▼
 analysis dict  →  JSON response  →  frontend renderResults()
 ```
 
+Review and Moxfield routes also emit best-effort `user_action_logs` rows when
+`ACTION_LOGGING_ENABLED` is enabled. These logs include full submitted decklist text,
+authenticated user identity, request IDs, selected options, summarized results, and
+timing diagnostics. Logging failures are swallowed.
+
 ---
 
 ## Backend Files
+
+### `app/auth.py`
+
+Supabase invite gate for hosted deployments. Auth is enabled when Supabase env vars are
+configured or `INVITE_AUTH_ENABLED=true`. It validates the browser's Supabase bearer token,
+normalizes the user email, then checks `public.allowed_users` with the service-role key.
+When auth is disabled, local development continues without requiring Supabase.
+
+Public runtime config is exposed through `GET /api/config`; the service-role key is never
+sent to the browser.
 
 ### `app/models/card.py`
 
@@ -383,11 +405,11 @@ Single-page app shell. All content is rendered into `<section>` elements by `app
 | `results-panel` | Container for all result tabs |
 | `commander-header` | Commander/partner names, color pips, bracket label, and enriched card details |
 | `tab-overview` | Stat cards, mana curve, type donut, role bars, warnings |
-| `tab-plan` | Framework coverage, CMC curve, playtest table, mulligan, sequencing, card role table with filtered-view clipboard export |
+| `tab-plan` | Path to Victory (full-width, top), Commander Role (full-width: detected themes grid + editable user-added role tags), Framework coverage, CMC curve, playtest table, mulligan, sequencing, card role table with filtered-view clipboard export |
 | `tab-validation` | Error/warning lists |
 | `tab-synergy` | Synergy cluster cards, missing staples |
 | `tab-bracket` | 5-box bracket display + GC cards |
-| `tab-ai` | Advisor summary, sanitized suggestions, budget-aware EDHREC table |
+| `tab-ai` | Analysis tab: EDHREC, creativity score, and optional AI summary/suggestions |
 | `tab-cards` | Filterable/sortable full card list |
 
 **Tables with `data-sort` headers** (sort state managed by `initTableSort()`):
@@ -403,21 +425,21 @@ All frontend logic. No build step — plain ES2020.
 
 **Module-level state:**
 ```javascript
-let currentAnalysis = null;   // last API response
-let allCards = [];            // for card list filtering
-let _allCardRoles = [];       // for plan tab card role table
-let _cmcMapCache = {};        // {name → cmc} built from cards array
-let _cardRoleCurrentView = [];// current filtered/sorted Plan role rows
-let _cardRoleCardMap = new Map(); // card role name → enriched card entry
-let _edhrecMissing = [];      // EDHREC cards not in deck
-let _edhrecIncluded = [];     // EDHREC cards already in deck
+let currentAnalysis = null;          // last API response
+let allCards = [];                   // for card list filtering
+let _targetCommanderRoles = [];      // active target roles sent to re-run API
+let _detectedCommanderRoleNames = new Set(); // lowercased names from detectedMatches;
+                                     // used to filter them out of the editable tag list
+let _commanderRoleCatalog = { themes: [], typals: [] }; // from /api/commander-roles
+let _edhrecMissing = [];             // EDHREC cards not in deck
+let _edhrecIncluded = [];            // EDHREC cards already in deck
 ```
 
 **Sort state objects** (mutated in place by `initTableSort()`):
 ```javascript
 const _cardSort   = { col: 'name',    dir: 1  };   // card list tab
 const _roleSort   = { col: 'name',    dir: 1  };   // plan tab role table
-const _edhrecSort = { col: 'synergy', dir: -1 };   // Advisor tab EDHREC tables
+const _edhrecSort = { col: 'synergy', dir: -1 };   // Analysis tab EDHREC tables
 ```
 
 **Sort utilities:**
@@ -438,7 +460,7 @@ const _edhrecSort = { col: 'synergy', dir: -1 };   // Advisor tab EDHREC tables
 | `renderValidation(data)` | Error/warning lists |
 | `renderSynergy(data)` | Cluster cards + missing staples |
 | `renderBracket(data)` | 5-box bracket display (1=Exhibition…5=cEDH) + reasoning + GC cards |
-| `renderAI(data)` | Advisor summary + suggestions + EDHREC section; calls `initEdhrecSort()` after setting innerHTML |
+| `renderAI(data)` | Analysis tab renderer: creativity, EDHREC, optional AI summary/suggestions; calls `initEdhrecSort()` after setting innerHTML |
 | `buildEdhrecSection(edhrec, deckNames)` | Returns HTML string; populates `_edhrecMissing` / `_edhrecIncluded` |
 | `renderEdhrecRows(cards, inDeck)` | Returns `<tr>` HTML for EDHREC table rows with role tags |
 | `initEdhrecSort()` | Attaches sort to both EDHREC tables; re-renders tbodies on sort |
@@ -448,9 +470,9 @@ const _edhrecSort = { col: 'synergy', dir: -1 };   // Advisor tab EDHREC tables
 **Card link helpers:**
 - `renderCardLink(name, options)` renders a Scryfall link using the card's `scryfall_uri` when available and an exact Scryfall search fallback otherwise.
 - `linkKnownCardNames(text, extraNames)` links known card names inside freeform text, including Bracket reasoning.
-- `linkSuggestionText(text)` handles Advisor suggestion shapes such as `Cut: X -> Add: Y`, arrows, and comma-separated add/consider lists.
+- `linkSuggestionText(text)` handles AI suggestion shapes such as `Cut: X -> Add: Y`, arrows, and comma-separated add/consider lists.
 
-Clickable card-name coverage includes commander detail headers, Synergy cluster tags, missing staples, Bracket game changers/reasoning, Advisor suggestions, EDHREC rows, Plan role/map sections, low-CMC payoffs, mulligan pieces, and the Card List.
+Clickable card-name coverage includes commander detail headers, Synergy cluster tags, missing staples, Bracket game changers/reasoning, AI suggestions, EDHREC rows, Plan role/map sections, low-CMC payoffs, mulligan pieces, and the Card List.
 
 `renderPlan(data)` also links card names inside the playtest notes, mulligan keep/mulligan rules, and sequencing guide text. Commander mana symbols in the header are colorized, including hybrid-style gradients for mixed symbols.
 
@@ -470,12 +492,26 @@ initTableSort(document.getElementById('card-role-table'), _roleSort, () => filte
 
 ### `frontend/style.css`
 
-Dark-theme CSS (~620 lines). Notable class groups:
+"Arcane Forge" design system (~985 lines). Fonts loaded via Google Fonts `@import`: `Cinzel` (display/logo), `DM Sans` (body), `Fira Code` (mono/data). See `docs/design-brief.md` for the full design system reference.
+
+**CSS custom properties** (all in `:root`):
+
+| Token | Value | Role |
+|---|---|---|
+| `--bg` / `--bg2` / `--bg3` / `--bg4` | `#09090e` → `#1a1c2c` | Surface layers, darkest to most elevated |
+| `--border` / `--border-hi` | `#222436` / `#2c2f50` | Default and highlighted border |
+| `--accent` / `--accent2` | `#c8a44a` / `#e4c068` | Gold accent (primary / lighter hover state) |
+| `--accent-dim` / `--accent-glow` | `#7a6228` / `rgba(200,164,74,.14)` | Bar fill gradient end / focus ring and glow |
+| `--text` / `--text2` / `--text3` | `#d4d7eb` / `#a4abc5` / `#b1b2be` | Primary / secondary / tertiary text |
+| `--green` / `--red` / `--yellow` / `--blue` / `--orange` | — | Status and role-chip colors |
+| `--radius` / `--radius-sm` | `12px` / `7px` | Panel and element border radii |
+
+**Notable class groups:**
 
 | Class / selector | Purpose |
 |---|---|
 | `th[data-sort]`, `.sort-asc::after`, `.sort-desc::after` | Sort indicator arrows (↑/↓) on table headers |
-| `a.focus-card-link` | Purple pill links for suggested cards in Commander Role panel |
+| `a.focus-card-link` | Gold pill links for suggested cards in Commander Role panel |
 | `a.card-name-link`, `a.inline-card-link` | Scryfall links for card names in tables, tags, suggestions, and freeform text |
 | `.commander-detail-*`, `.commander-oracle`, `.mana-symbol` | Enriched commander/partner detail card layout |
 | `.coverage-card`, `.coverage-bar-*` | Framework coverage bars in Plan tab |
@@ -483,10 +519,12 @@ Dark-theme CSS (~620 lines). Notable class groups:
 | `.edhrec-table`, `.edhrec-source-hs/top`, `.edhrec-budget-note` | EDHREC recommendation tables; numeric metric cells are centered and budget filtering is surfaced in the UI |
 | `.role-tag`, `.role-Lands`, `.role-Card-Advantage`, etc. | Colored role chips in Plan + EDHREC tables |
 | `.cluster-card`, `.strength-badge` | Synergy cluster cards |
-| `.cluster-tag`, `.tag` | Clickable pill/tag styling used by Synergy, Bracket, Advisor, and Plan details |
+| `.cluster-tag`, `.tag` | Clickable pill/tag styling used by Synergy, Bracket, Analysis, and Plan details |
 | `.download-overlay`, `.download-bar-*` | Bulk data download progress overlay |
 | `.mana.w/u/b/r/g` | Header mana symbol decorations |
 | `.pip-W/U/B/R/G` | Inline color identity pips |
+| `.detected-role-item`, `.detected-role-remove-btn` | Detected theme/typal cards in Plan tab; remove button fades in on hover |
+| `.detected-role-removed` | Applied when a detected role is dismissed; dims and strikes through the card |
 
 ---
 
