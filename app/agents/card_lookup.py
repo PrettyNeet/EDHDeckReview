@@ -36,6 +36,10 @@ CARD_FIELDS = [
 _INDEX: dict[str, dict] | None = None
 
 OTAG_INDEX_PATH = CACHE_DIR / "otag_index.json"
+CARD_INDEX_PATH = CACHE_DIR / "card_index.json"
+CARD_INDEX_GZ_PATH = CACHE_DIR / "card_index.json.gz"
+OTAG_INDEX_GZ_PATH = CACHE_DIR / "otag_index.json.gz"
+INDEX_METADATA_PATH = CACHE_DIR / "index_metadata.json"
 
 TRACKED_OTAGS: list[str] = [
     "ramp", "mana-rock", "mana-dork",                   # Ramp
@@ -101,7 +105,7 @@ def build_index(force: bool = False) -> Path:
     """
     global _INDEX
     CACHE_DIR.mkdir(exist_ok=True)
-    cache_path = CACHE_DIR / "card_index.json"
+    cache_path = CARD_INDEX_PATH
 
     if cache_path.exists() and not force:
         return cache_path
@@ -194,11 +198,16 @@ def _load_index() -> dict[str, dict]:
         return _INDEX
 
     if _INDEX is None:
-        cache_path = CACHE_DIR / "card_index.json"
-        if not cache_path.exists():
+        cache_path = CARD_INDEX_PATH
+        gz_path = CARD_INDEX_GZ_PATH
+        if not cache_path.exists() and not gz_path.exists():
             build_index()
-        with open(cache_path, "r", encoding="utf-8") as f:
-            _INDEX = json.load(f)
+        if cache_path.exists():
+            with open(cache_path, "r", encoding="utf-8") as f:
+                _INDEX = json.load(f)
+        else:
+            with gzip.open(gz_path, "rt", encoding="utf-8") as f:
+                _INDEX = json.load(f)
         sample = next(iter(_INDEX.values()), {})
         if sample and "prices" not in sample:
             build_index(force=True)
@@ -247,11 +256,15 @@ def _load_otag_index() -> dict[str, list[str]]:
     global _OTAG_INDEX
     if _OTAG_INDEX is not None:
         return _OTAG_INDEX
-    if not OTAG_INDEX_PATH.exists():
+    if not OTAG_INDEX_PATH.exists() and not OTAG_INDEX_GZ_PATH.exists():
         _OTAG_INDEX = {}
         return _OTAG_INDEX
-    with open(OTAG_INDEX_PATH, "r", encoding="utf-8") as f:
-        _OTAG_INDEX = json.load(f)
+    if OTAG_INDEX_PATH.exists():
+        with open(OTAG_INDEX_PATH, "r", encoding="utf-8") as f:
+            _OTAG_INDEX = json.load(f)
+    else:
+        with gzip.open(OTAG_INDEX_GZ_PATH, "rt", encoding="utf-8") as f:
+            _OTAG_INDEX = json.load(f)
     return _OTAG_INDEX
 
 
@@ -322,6 +335,27 @@ def check_bulk_data_freshness() -> dict:
     Return age information for the local default-cards bulk file.
     Scryfall considers data older than 24 hours stale.
     """
+    if INDEX_METADATA_PATH.exists():
+        try:
+            metadata = json.loads(INDEX_METADATA_PATH.read_text(encoding="utf-8"))
+            updated_at = metadata.get("scryfall_updated_at") or metadata.get("generated_at")
+            if updated_at:
+                updated = datetime.fromisoformat(str(updated_at).replace("Z", "+00:00"))
+                age_hours = (datetime.now(timezone.utc) - updated).total_seconds() / 3600
+                return {
+                    "found": True,
+                    "path": str(INDEX_METADATA_PATH),
+                    "filename": metadata.get("source_filename") or "deploy cache",
+                    "age_hours": round(age_hours, 2),
+                    "age_human": _fmt_age(age_hours),
+                    "is_stale": age_hours > STALE_HOURS,
+                    "mtime_iso": updated.isoformat(),
+                    "source": "deploy_cache",
+                    "metadata": metadata,
+                }
+        except (json.JSONDecodeError, OSError, ValueError):
+            pass
+
     try:
         bulk_path = _find_bulk_file()
     except FileNotFoundError:

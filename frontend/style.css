@@ -110,6 +110,53 @@ header {
 /* ── Main Layout ──────────────────────────────────────────────────────── */
 main { max-width: 1100px; margin: 0 auto; padding: 28px 20px 60px; }
 
+/* ── Auth ─────────────────────────────────────────────────────────────── */
+.auth-panel {
+  max-width: 420px;
+  margin: 42px auto;
+}
+.auth-note {
+  color: var(--text2);
+  font-size: .86rem;
+  margin-bottom: 18px;
+  line-height: 1.45;
+}
+.auth-form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.auth-form label {
+  font-size: .78rem;
+  color: var(--text2);
+  font-weight: 700;
+}
+.auth-form input {
+  background: var(--bg3);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 10px 12px;
+  font-size: .9rem;
+}
+.auth-form input:focus { outline: none; border-color: var(--accent); }
+.auth-actions {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 10px;
+  align-items: center;
+  margin-top: 8px;
+}
+.auth-actions .btn-primary { margin-top: 0; }
+.auth-status {
+  min-height: 1.2em;
+  color: var(--text2);
+  font-size: .82rem;
+  line-height: 1.4;
+}
+.auth-status.error { color: var(--red); }
+.auth-status.ok { color: var(--green); }
+
 /* ── Panels ───────────────────────────────────────────────────────────── */
 .panel {
   background: var(--bg2);

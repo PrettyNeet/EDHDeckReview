@@ -6,6 +6,9 @@ let allCards = [];
 let _targetCommanderRoles = [];
 let _commanderRoleCatalog = { themes: [], typals: [] };
 let _commanderRoleByName = new Map();
+let _appConfig = { auth_enabled: false, data_updates_enabled: true };
+let _supabaseClient = null;
+let _session = null;
 
 // Per-table sort state (mutated in place by initTableSort)
 const _cardSort       = { col: 'name',    dir: 1  };
@@ -26,6 +29,90 @@ const BUDGET_TIERS = {
   premium: { label: 'Premium', max_card_price: 60 },
   unlimited: { label: 'No Limit', max_card_price: null },
 };
+
+async function apiFetch(url, options = {}) {
+  const headers = new Headers(options.headers || {});
+  if (_session?.access_token) {
+    headers.set('Authorization', `Bearer ${_session.access_token}`);
+  }
+  return fetch(url, { ...options, headers });
+}
+
+function setAuthStatus(message, kind = '') {
+  const el = document.getElementById('auth-status');
+  if (!el) return;
+  el.textContent = message || '';
+  el.className = `auth-status ${kind}`.trim();
+}
+
+function updateAuthShell() {
+  const authPanel = document.getElementById('auth-panel');
+  const appShell = document.getElementById('app-shell');
+  const userBadge = document.getElementById('auth-user-badge');
+  const signOutBtn = document.getElementById('sign-out-btn');
+  const hasAccess = !_appConfig.auth_enabled || Boolean(_session?.access_token);
+
+  authPanel.classList.toggle('hidden', hasAccess);
+  appShell.classList.toggle('hidden', !hasAccess);
+  userBadge.classList.toggle('hidden', !hasAccess || !_session?.user?.email);
+  signOutBtn.classList.toggle('hidden', !hasAccess || !_appConfig.auth_enabled);
+
+  if (_session?.user?.email) {
+    userBadge.textContent = _session.user.email;
+    userBadge.className = 'badge badge-ready';
+  }
+}
+
+async function loadAppConfig() {
+  const r = await fetch('/api/config');
+  _appConfig = await r.json();
+}
+
+async function initAuth() {
+  await loadAppConfig();
+
+  if (!_appConfig.data_updates_enabled) {
+    document.getElementById('update-data-btn')?.classList.add('hidden');
+  }
+
+  if (!_appConfig.auth_enabled) {
+    updateAuthShell();
+    await startAuthenticatedApp();
+    return;
+  }
+
+  if (!window.supabase?.createClient || !_appConfig.supabase_url || !_appConfig.supabase_anon_key) {
+    setAuthStatus('Authentication is configured incorrectly. Missing Supabase public config.', 'error');
+    document.getElementById('auth-panel').classList.remove('hidden');
+    return;
+  }
+
+  _supabaseClient = window.supabase.createClient(_appConfig.supabase_url, _appConfig.supabase_anon_key);
+  const { data } = await _supabaseClient.auth.getSession();
+  _session = data.session;
+  updateAuthShell();
+
+  _supabaseClient.auth.onAuthStateChange((_event, session) => {
+    _session = session;
+    updateAuthShell();
+    if (session) startAuthenticatedApp();
+  });
+
+  if (_session) await startAuthenticatedApp();
+}
+
+async function startAuthenticatedApp() {
+  if (startAuthenticatedApp.started) return;
+  startAuthenticatedApp.started = true;
+  await checkIndexStatus();
+  const allowed = await loadCommanderRoleCatalog();
+  if (allowed === false) {
+    startAuthenticatedApp.started = false;
+    document.getElementById('app-shell').classList.add('hidden');
+    document.getElementById('auth-panel').classList.remove('hidden');
+    setAuthStatus('This account is not invited to use this app.', 'error');
+  }
+}
 
 // ── Sort utilities ────────────────────────────────────────────────────────────
 const RARITY_ORDER = { common: 0, uncommon: 1, rare: 2, mythic: 3 };
@@ -121,8 +208,9 @@ function getCommanderRoleMeta(roleName) {
 
 async function loadCommanderRoleCatalog() {
   try {
-    const r = await fetch('/api/commander-roles');
-    if (!r.ok) return;
+    const r = await apiFetch('/api/commander-roles');
+    if (r.status === 401 || r.status === 403) return false;
+    if (!r.ok) return true;
     const data = await r.json();
     _commanderRoleCatalog = {
       themes: data.themes || [],
@@ -135,6 +223,7 @@ async function loadCommanderRoleCatalog() {
   } catch {
     // Role descriptions are progressive enhancement; analysis still works without them.
   }
+  return true;
 }
 
 function getCardUrl(name, fallbackUrl = '') {
@@ -517,6 +606,9 @@ async function checkIndexStatus() {
       indexBadge.textContent = 'Index: ready';
       indexBadge.className   = 'badge badge-ready';
       enableSubmit();
+    } else if (!_appConfig.data_updates_enabled) {
+      indexBadge.textContent = 'Index: missing';
+      indexBadge.className   = 'badge badge-error';
     } else {
       indexBadge.textContent = 'Index: building…';
       indexBadge.className   = 'badge badge-building';
@@ -539,7 +631,7 @@ function renderBulkBadge(bulk, badge, btn) {
   if (!bulk.found) {
     badge.textContent = 'Data: missing';
     badge.className   = 'badge badge-error';
-    btn.classList.remove('hidden');
+    if (_appConfig.data_updates_enabled) btn.classList.remove('hidden');
     btn.classList.add('stale');
     return;
   }
@@ -551,29 +643,30 @@ function renderBulkBadge(bulk, badge, btn) {
   if (stale) {
     badge.textContent = `Data: ${age} — STALE`;
     badge.className   = 'badge badge-stale';
-    btn.classList.remove('hidden');
+    if (_appConfig.data_updates_enabled) btn.classList.remove('hidden');
     btn.classList.add('stale');
     btn.title = 'Scryfall data is over 24 hours old — click to download the latest';
   } else if (aging) {
     badge.textContent = `Data: ${age}`;
     badge.className   = 'badge badge-aging';
-    btn.classList.remove('hidden');
+    if (_appConfig.data_updates_enabled) btn.classList.remove('hidden');
     btn.classList.remove('stale');
     btn.title = `Data is ${age} old — update recommended before 24h`;
   } else {
     badge.textContent = `Data: ${age}`;
     badge.className   = 'badge badge-ready';
-    btn.classList.remove('hidden', 'stale');   // still show it, just neutral
+    if (_appConfig.data_updates_enabled) btn.classList.remove('hidden', 'stale');   // still show it, just neutral
     btn.title = `Bulk data is ${age} old (fresh)`;
   }
 }
 
 async function buildIndex() {
+  if (!_appConfig.data_updates_enabled) return;
   const badge = document.getElementById('index-status');
   badge.textContent = 'Index: building (~30s)…';
   badge.className   = 'badge badge-building';
   try {
-    const r    = await fetch('/api/index/build', { method: 'POST' });
+    const r    = await apiFetch('/api/index/build', { method: 'POST' });
     const data = await r.json();
     if (data.success) {
       badge.textContent = 'Index: ready';
@@ -594,6 +687,7 @@ function enableSubmit() {
 let _pollInterval = null;
 
 document.getElementById('update-data-btn').addEventListener('click', async () => {
+  if (!_appConfig.data_updates_enabled) return;
   const confirmed = confirm(
     'This will download the latest Scryfall card database (~500 MB) and rebuild the card index.\n\n' +
     'The server will remain usable during the download. Continue?'
@@ -601,7 +695,7 @@ document.getElementById('update-data-btn').addEventListener('click', async () =>
   if (!confirmed) return;
 
   try {
-    const r = await fetch('/api/bulk-data/update', { method: 'POST' });
+    const r = await apiFetch('/api/bulk-data/update', { method: 'POST' });
     if (!r.ok) {
       const err = await r.json();
       alert(`Could not start update: ${err.detail || r.statusText}`);
@@ -633,7 +727,7 @@ function startPollingProgress() {
   if (_pollInterval) clearInterval(_pollInterval);
   _pollInterval = setInterval(async () => {
     try {
-      const r    = await fetch('/api/bulk-data/progress');
+      const r    = await apiFetch('/api/bulk-data/progress');
       const data = await r.json();
       const { status, pct = 0, message = '', downloaded_mb, total_mb, filename } = data;
 
@@ -677,7 +771,7 @@ document.getElementById('moxfield-import-btn').addEventListener('click', async (
   statusEl.textContent = '';
 
   try {
-    const r = await fetch(`/api/moxfield?url=${encodeURIComponent(url)}`);
+    const r = await apiFetch(`/api/moxfield?url=${encodeURIComponent(url)}`);
     const data = await r.json();
     if (!r.ok) throw new Error(data.detail || r.statusText);
 
@@ -761,7 +855,7 @@ async function submitDeck() {
   fd.append('skip_ai', skipAi ? 'true' : 'false');
 
   try {
-    const r = await fetch('/api/review', { method: 'POST', body: fd });
+    const r = await apiFetch('/api/review', { method: 'POST', body: fd });
     if (!r.ok) {
       const err = await r.json();
       throw new Error(err.detail || r.statusText);
@@ -1793,9 +1887,57 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
   });
 });
 
+// ── Auth events ───────────────────────────────────────────────────────────────
+document.getElementById('auth-form')?.addEventListener('submit', async event => {
+  event.preventDefault();
+  if (!_supabaseClient) return;
+
+  const email = document.getElementById('auth-email').value.trim();
+  const password = document.getElementById('auth-password').value;
+  setAuthStatus('Signing in...');
+
+  const { data, error } = await _supabaseClient.auth.signInWithPassword({ email, password });
+  if (error) {
+    setAuthStatus(error.message, 'error');
+    return;
+  }
+  _session = data.session;
+  setAuthStatus('');
+  updateAuthShell();
+  await startAuthenticatedApp();
+});
+
+document.getElementById('sign-up-btn')?.addEventListener('click', async () => {
+  if (!_supabaseClient) return;
+
+  const email = document.getElementById('auth-email').value.trim();
+  const password = document.getElementById('auth-password').value;
+  if (!email || !password) {
+    setAuthStatus('Enter an email and password first.', 'error');
+    return;
+  }
+
+  setAuthStatus('Creating account...');
+  const { data, error } = await _supabaseClient.auth.signUp({ email, password });
+  if (error) {
+    setAuthStatus(error.message, 'error');
+    return;
+  }
+  _session = data.session;
+  setAuthStatus('Account created. If this email is invited, the tool will unlock after sign-in.', 'ok');
+  updateAuthShell();
+  if (_session) await startAuthenticatedApp();
+});
+
+document.getElementById('sign-out-btn')?.addEventListener('click', async () => {
+  if (_supabaseClient) await _supabaseClient.auth.signOut();
+  _session = null;
+  startAuthenticatedApp.started = false;
+  updateAuthShell();
+});
+
 // ── Init ──────────────────────────────────────────────────────────────────────
-checkIndexStatus();
-loadCommanderRoleCatalog();
+initAuth();
 
 // Sortable static tables
 const _cardTableEl = document.getElementById('card-table');

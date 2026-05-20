@@ -1,0 +1,39 @@
+name: Refresh Scryfall deploy cache
+
+on:
+  schedule:
+    - cron: "24 10 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Refresh deploy cache
+        run: python scripts/refresh_deploy_cache.py
+
+      - name: Create pull request
+        uses: peter-evans/create-pull-request@v6
+        with:
+          branch: automation/refresh-scryfall-cache
+          delete-branch: true
+          title: "Refresh Scryfall deploy cache"
+          commit-message: "Refresh Scryfall deploy cache"
+          body: "Automated refresh of compressed Scryfall card and otag indexes for Vercel."
+          add-paths: |
+            cache/card_index.json.gz
+            cache/otag_index.json.gz
+            cache/index_metadata.json
