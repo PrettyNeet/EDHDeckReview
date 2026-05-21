@@ -112,6 +112,16 @@ Feature flags are read from environment variables, returned through `/api/config
 
 When AI review is disabled, the model code remains in the repo but cannot be invoked by the web app or a crafted review request. EDHREC recommendations and creativity analysis still appear in the Analysis tab.
 
+## Supabase Auth CAPTCHA
+
+Supabase Auth can enforce Cloudflare Turnstile for the hosted login panel. Configure the Turnstile secret key in Supabase Auth CAPTCHA settings, then set the public site key for this app:
+
+```bash
+CLOUDFLARE_TURNSTILE_SITE_KEY=...
+```
+
+`TURNSTILE_SITE_KEY` is also accepted as a fallback name. The secret key is not returned by `/api/config` and should not be stored in frontend code.
+
 ---
 
 ## Action Logging

@@ -80,6 +80,7 @@ def public_config() -> dict[str, Any]:
         "auth_enabled": auth_enabled(),
         "supabase_url": _env("SUPABASE_URL"),
         "supabase_anon_key": _env("SUPABASE_ANON_KEY"),
+        "turnstile_site_key": _env("CLOUDFLARE_TURNSTILE_SITE_KEY") or _env("TURNSTILE_SITE_KEY"),
     }
 
 

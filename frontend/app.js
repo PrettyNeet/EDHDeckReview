@@ -11,6 +11,9 @@ let _appConfig = { auth_enabled: false, data_updates_enabled: true };
 let _supabaseClient = null;
 let _session = null;
 let _authMode = 'sign-in';
+let _turnstileWidgetId = null;
+let _turnstileToken = '';
+let _turnstileRenderTimer = null;
 let _statusTimer = null;
 let _confirmResolve = null;
 
@@ -118,6 +121,74 @@ function setAuthStatus(message, kind = '') {
   el.className = `auth-status ${kind}`.trim();
 }
 
+function authCaptchaEnabled() {
+  return Boolean(_appConfig.auth_enabled && _appConfig.turnstile_site_key);
+}
+
+function renderAuthCaptcha() {
+  const wrap = document.getElementById('auth-captcha-wrap');
+  const container = document.getElementById('auth-turnstile');
+  if (!wrap || !container) return;
+
+  const shouldShow = authCaptchaEnabled() && _authMode !== 'recovery';
+  wrap.classList.toggle('hidden', !shouldShow);
+  if (!shouldShow) return;
+
+  if (!window.turnstile?.render) {
+    if (!_turnstileRenderTimer) {
+      _turnstileRenderTimer = setTimeout(() => {
+        _turnstileRenderTimer = null;
+        renderAuthCaptcha();
+      }, 250);
+    }
+    return;
+  }
+
+  if (_turnstileWidgetId !== null) return;
+
+  _turnstileWidgetId = window.turnstile.render(container, {
+    sitekey: _appConfig.turnstile_site_key,
+    theme: 'dark',
+    action: 'auth',
+    callback: token => {
+      _turnstileToken = token;
+      setAuthStatus('');
+    },
+    'expired-callback': () => {
+      _turnstileToken = '';
+    },
+    'error-callback': () => {
+      _turnstileToken = '';
+      setAuthStatus('CAPTCHA failed to load. Try refreshing the challenge.', 'error');
+    },
+  });
+}
+
+function resetAuthCaptcha() {
+  _turnstileToken = '';
+  if (_turnstileWidgetId !== null && window.turnstile?.reset) {
+    window.turnstile.reset(_turnstileWidgetId);
+  }
+}
+
+function getAuthCaptchaToken() {
+  if (!authCaptchaEnabled() || _authMode === 'recovery') return null;
+  const token = _turnstileToken || (
+    _turnstileWidgetId !== null && window.turnstile?.getResponse
+      ? window.turnstile.getResponse(_turnstileWidgetId)
+      : ''
+  );
+  if (!token) {
+    setAuthStatus('Complete the CAPTCHA first.', 'error');
+    return undefined;
+  }
+  return token;
+}
+
+function withCaptchaToken(options, captchaToken) {
+  return captchaToken ? { ...options, captchaToken } : options;
+}
+
 function setAuthMode(mode) {
   _authMode = mode;
   const title = document.getElementById('auth-title');
@@ -159,6 +230,8 @@ function setAuthMode(mode) {
   reset.classList.toggle('hidden', signUp || recovery || resetRequest);
   back.classList.toggle('hidden', mode === 'sign-in');
   setAuthStatus('');
+  renderAuthCaptcha();
+  resetAuthCaptcha();
 }
 
 function getAuthFormValues() {
@@ -1199,7 +1272,6 @@ function updateTabBadges(data) {
   updateTabBadge('synergy', (data.synergy_clusters || []).length);
   updateTabBadge('bracket', (data.bracket?.game_changer_cards || []).length);
   updateTabBadge('ai', countEdhrecRecommendations(data) + ((data.ai_suggestions || []).length));
-  updateTabBadge('cards', (data.cards || []).length);
 }
 
 // ── Commander Header ──────────────────────────────────────────────────────────
@@ -2261,10 +2333,14 @@ document.getElementById('auth-form')?.addEventListener('submit', async event => 
       setAuthStatus('Enter your email first.', 'error');
       return;
     }
+    const captchaToken = getAuthCaptchaToken();
+    if (captchaToken === undefined) return;
     setAuthStatus('Sending reset link...');
-    const { error } = await _supabaseClient.auth.resetPasswordForEmail(email, {
-      redirectTo: window.location.origin,
-    });
+    const { error } = await _supabaseClient.auth.resetPasswordForEmail(
+      email,
+      withCaptchaToken({ redirectTo: window.location.origin }, captchaToken)
+    );
+    resetAuthCaptcha();
     if (error) {
       setAuthStatus(error.message, 'error');
       return;
@@ -2296,12 +2372,15 @@ document.getElementById('auth-form')?.addEventListener('submit', async event => 
 
   if (_authMode === 'sign-up') {
     if (!validateNewPassword(password, confirm)) return;
+    const captchaToken = getAuthCaptchaToken();
+    if (captchaToken === undefined) return;
     setAuthStatus('Creating account...');
     const { data, error } = await _supabaseClient.auth.signUp({
       email,
       password,
-      options: { emailRedirectTo: window.location.origin },
+      options: withCaptchaToken({ emailRedirectTo: window.location.origin }, captchaToken),
     });
+    resetAuthCaptcha();
     if (error) {
       setAuthStatus(error.message, 'error');
       return;
@@ -2318,8 +2397,15 @@ document.getElementById('auth-form')?.addEventListener('submit', async event => 
     return;
   }
 
+  const captchaToken = getAuthCaptchaToken();
+  if (captchaToken === undefined) return;
   setAuthStatus('Signing in...');
-  const { data, error } = await _supabaseClient.auth.signInWithPassword({ email, password });
+  const { data, error } = await _supabaseClient.auth.signInWithPassword({
+    email,
+    password,
+    ...(captchaToken ? { options: { captchaToken } } : {}),
+  });
+  resetAuthCaptcha();
   if (error) {
     setAuthStatus(`${error.message}. If you have not set a password yet, create an account with your whitelisted email or use password reset.`, 'error');
     return;

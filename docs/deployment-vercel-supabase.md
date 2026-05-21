@@ -76,9 +76,18 @@ AI_PROVIDER=auto
 FEATURE_AI_REVIEW_ENABLED=false
 ANTHROPIC_API_KEY=...
 OPENAI_API_KEY=...
+CLOUDFLARE_TURNSTILE_SITE_KEY=...
 ```
 
-Only `SUPABASE_URL` and `SUPABASE_ANON_KEY` are returned to the browser by `/api/config`.
+`SUPABASE_URL`, `SUPABASE_ANON_KEY`, and the optional Turnstile site key are returned to the browser by `/api/config`. Service-role, provider, and CAPTCHA secret keys are never returned.
+
+## Supabase Auth CAPTCHA
+
+To require Cloudflare Turnstile on sign in, sign up, and password reset:
+
+1. Enable CAPTCHA in the Supabase dashboard under Auth settings.
+2. Select Cloudflare Turnstile and enter the Turnstile secret key there.
+3. Set `CLOUDFLARE_TURNSTILE_SITE_KEY` in the app environment. `TURNSTILE_SITE_KEY` also works as a fallback.
 
 ## Feature flags
 

@@ -133,6 +133,7 @@ Open `http://localhost:8000`
 - `SUPABASE_URL=...`
 - `SUPABASE_ANON_KEY=...`
 - `SUPABASE_SERVICE_ROLE_KEY=...`
+- `CLOUDFLARE_TURNSTILE_SITE_KEY=...` (optional Supabase Auth CAPTCHA site key)
 - `FEATURE_AI_REVIEW_ENABLED=true|false` (`false` by default on Vercel, `true` locally)
 - `ACTION_LOGGING_ENABLED=true|false`
 - `ACTION_LOG_IP_HASH_SALT=...`
