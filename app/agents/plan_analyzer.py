@@ -34,7 +34,7 @@ from dataclasses import dataclass, field, asdict
 from typing import Optional
 
 from app.models.card import CardEntry
-from app.agents.card_lookup import lookup_otags
+from app.agents.card_lookup import lookup_otags, get_cards_by_otag
 from app.agents.role_catalog import get_role_catalog_entries, get_role_metadata
 
 # ─── Category targets ─────────────────────────────────────────────────────────
@@ -815,6 +815,45 @@ def detect_commander_role(commander: CardEntry, entries: list[CardEntry] | None 
     return [match["name"] for match in detect_commander_role_matches(commander, entries)]
 
 
+# Otag tags that cover each role well enough to query dynamically.
+# Roles absent from this map fall back to the static ROLE_SUGGESTIONS dict.
+_ROLE_OTAG_MAP: dict[str, list[str]] = {
+    "Card Draw Engine":   ["draw", "catalog", "play-from-top"],
+    "Ramp Engine":        ["ramp", "mana-rock", "mana-dork"],
+    "Artifact Matters":   ["mana-rock"],
+    "Proliferate Engine": ["pp-counters-matter"],
+    "Counters Engine":    ["pp-counters-matter"],
+    "Storm / Combo":      ["tutor"],
+    "Graveyard Engine":   ["graveyard-matters"],
+    "Utility / Value":    ["removal", "draw"],
+}
+
+
+def get_role_suggestions(
+    role: str,
+    color_identity: list[str],
+    max_cards: int = 6,
+) -> list[dict]:
+    """Return color-filtered card suggestions for a commander role.
+    Queries the local otag index first; falls back to the static ROLE_SUGGESTIONS list."""
+    tags = _ROLE_OTAG_MAP.get(role)
+    ci = color_identity if color_identity else None
+
+    if tags:
+        cards = get_cards_by_otag(tags, commander_ci=ci, max_results=max_cards * 4)
+        if len(cards) >= max_cards:
+            return [{"name": c["name"], "url": _scryfall_url(c["name"])} for c in cards[:max_cards]]
+
+    # Fallback: static list filtered by color identity
+    ci_set = set(color_identity) if color_identity else set("WUBRG")
+    raw = ROLE_SUGGESTIONS.get(role, ROLE_SUGGESTIONS["Utility / Value"])
+    return [
+        {"name": c["name"], "url": _scryfall_url(c["name"])}
+        for c in raw
+        if not c["ci"] or all(x in ci_set for x in c["ci"])
+    ][:max_cards]
+
+
 def commander_focus_advice(roles: list[str], color_identity: list[str] | None = None) -> dict:
     """
     Return advice and color-filtered card suggestions for the commander's role.
@@ -876,20 +915,12 @@ def commander_focus_advice(roles: list[str], color_identity: list[str] | None = 
             "then prioritize cards that also cover ramp, card advantage, or interaction."
         )
 
-    # Filter suggestions by the commander's color identity
-    ci_set = set(color_identity) if color_identity else set("WUBRG")
     suggestion_role = ROLE_SUGGESTION_ALIASES.get(role, role)
-    raw = ROLE_SUGGESTIONS.get(suggestion_role, ROLE_SUGGESTIONS["Utility / Value"])
-
-    def _fits(card: dict) -> bool:
-        if not card["ci"]:
-            return True  # colorless — always legal
-        return all(c in ci_set for c in card["ci"])
-
-    suggested_cards = [
-        {"name": c["name"], "url": _scryfall_url(c["name"])}
-        for c in raw if _fits(c)
-    ][:6]
+    suggested_cards = get_role_suggestions(
+        suggestion_role,
+        color_identity=color_identity or [],
+        max_cards=6,
+    )
 
     return {"text": text, "suggested_cards": suggested_cards}
 

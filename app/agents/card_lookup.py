@@ -51,6 +51,10 @@ TRACKED_OTAGS: list[str] = [
     "tutor",                                             # Plan Cards / CA
     "graveyard-matters", "tribal", "synergy-mill",       # Plan Cards
     "power-matters", "pp-counters-matter",               # Plan Cards
+    "protection",                                        # Hexproof/shroud givers
+    "pump",                                              # Anthem / +N/+N effects
+    "reanimation",                                       # Return from graveyard
+    "lifegain",                                          # Life gain effects
 ]
 
 _OTAG_INDEX: dict[str, list[str]] | None = None
@@ -275,6 +279,43 @@ def lookup_otags(card_name: str) -> list[str]:
     return _load_otag_index().get(_normalize_name(card_name), [])
 
 
+def get_cards_by_otag(
+    tags: list[str],
+    commander_ci: list[str] | None = None,
+    max_results: int = 40,
+) -> list[dict]:
+    """
+    Return cards that have ANY of the given otags, filtered by commander color identity.
+    Sorted: game_changer first, then ascending cmc.
+    commander_ci=None skips color filtering (use for colorless staples).
+    Returns dicts with 'name', 'color_identity', 'cmc', 'game_changer' keys.
+    """
+    otag_index = _load_otag_index()
+    card_index = _load_index()
+    ci_set = set(commander_ci) if commander_ci is not None else None
+    tag_set = set(tags)
+
+    results: list[dict] = []
+    for norm_name, card_tags in otag_index.items():
+        if not tag_set.intersection(card_tags):
+            continue
+        card = card_index.get(norm_name)
+        if not card:
+            continue
+        card_ci = card.get("color_identity") or []
+        if ci_set is not None and not set(card_ci).issubset(ci_set):
+            continue
+        results.append({
+            "name": card["name"],
+            "color_identity": card_ci,
+            "cmc": card.get("cmc") or 0,
+            "game_changer": card.get("game_changer", False),
+        })
+
+    results.sort(key=lambda c: (-c["game_changer"], c["cmc"]))
+    return results[:max_results]
+
+
 def build_otag_index(force: bool = False) -> Path:
     """
     Fetch all TRACKED_OTAGS from Scryfall's search API and write
@@ -317,6 +358,14 @@ def build_otag_index(force: bool = False) -> Path:
 
     _OTAG_INDEX = index
     print(f"Otag index built: {len(index):,} entries → {OTAG_INDEX_PATH}")
+
+    # Clear the staple cache so next call picks up the fresh index
+    try:
+        from app.agents.synergy import _staples_for_color
+        _staples_for_color.cache_clear()
+    except ImportError:
+        pass
+
     return OTAG_INDEX_PATH
 
 

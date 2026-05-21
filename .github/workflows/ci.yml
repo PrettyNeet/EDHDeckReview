@@ -1,0 +1,81 @@
+name: CI
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+
+# Cancel older in-progress runs for the same branch/PR
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Test (Python 3.12)
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest pytest-cov ruff
+
+      - name: Lint with ruff
+        run: ruff check app/ tests/ --output-format=github
+
+      - name: Run tests
+        env:
+          ANTHROPIC_API_KEY: "test-key-not-real"
+          FEATURE_AI_REVIEW_ENABLED: "false"
+        run: |
+          pytest tests/ -v --tb=short \
+            --cov=app --cov-report=term-missing --cov-report=xml \
+            -x
+
+      - name: Upload coverage
+        if: always()
+        uses: codecov/codecov-action@v4
+        with:
+          file: ./coverage.xml
+          fail_ci_if_error: false
+
+  type-check:
+    name: Type check (advisory)
+    runs-on: ubuntu-latest
+    # Type errors don't block merge — codebase has no mypy config yet
+    continue-on-error: true
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install mypy
+
+      - name: Run mypy
+        run: |
+          mypy app/ \
+            --ignore-missing-imports \
+            --no-strict-optional \
+            --follow-imports=silent \
+            --python-version 3.12
+        continue-on-error: true

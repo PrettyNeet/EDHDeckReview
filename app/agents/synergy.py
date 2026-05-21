@@ -12,8 +12,10 @@ from __future__ import annotations
 import re
 from collections import defaultdict, Counter
 
+from functools import lru_cache
+
 from app.models.card import CardEntry, SynergyCluster
-from app.agents.card_lookup import lookup_otags
+from app.agents.card_lookup import lookup_otags, get_cards_by_otag
 
 # ─── Role detection ────────────────────────────────────────────────────────────
 
@@ -217,15 +219,37 @@ SYNERGY_RULES: list[dict] = [
 
 # ─── Missing staples ──────────────────────────────────────────────────────────
 
-STAPLES_BY_COLOR: dict[str, list[str]] = {
-    "W": ["Swords to Plowshares", "Path to Exile", "Teferi's Protection", "Austere Command"],
-    "U": ["Counterspell", "Cyclonic Rift", "Rhystic Study", "Mystic Remora"],
-    "B": ["Demonic Tutor", "Vampiric Tutor", "Toxic Deluge", "Deadly Rollick"],
-    "R": ["Jeska's Will", "Deflecting Swipe", "Chaos Warp", "Dockside Extortionist"],
-    "G": ["Cultivate", "Kodama's Reach", "Nature's Lore", "Sylvan Library"],
-    "C": ["Sol Ring", "Arcane Signet", "Command Tower", "Fellwar Stone",
-           "Lightning Greaves", "Swiftfoot Boots", "Skullclamp"],
+# Otag tags to query per color when surfacing missing staples.
+# Cards are filtered by commander color identity and sorted by game_changer desc, cmc asc.
+_COLOR_STAPLE_OTAGS: dict[str, list[str]] = {
+    "W": ["removal", "board-wipe"],
+    "U": ["counterspell", "draw"],
+    "B": ["tutor", "removal"],
+    "R": ["removal", "ramp"],
+    "G": ["ramp", "mana-dork"],
+    "C": ["mana-rock"],   # colorless mana rocks only
 }
+
+_MAX_STAPLES_PER_COLOR = 6
+
+
+@lru_cache(maxsize=64)
+def _staples_for_color(color: str, ci_tuple: tuple[str, ...]) -> list[str]:
+    """Return up to _MAX_STAPLES_PER_COLOR staple suggestions for one color, cached per (color, ci)."""
+    tags = _COLOR_STAPLE_OTAGS.get(color, [])
+    if not tags:
+        return []
+    if color == "C":
+        cards = [
+            c for c in get_cards_by_otag(tags, commander_ci=None, max_results=60)
+            if not c["color_identity"]
+        ]
+    else:
+        cards = [
+            c for c in get_cards_by_otag(tags, commander_ci=list(ci_tuple), max_results=60)
+            if color in c["color_identity"]
+        ]
+    return [c["name"] for c in cards[:_MAX_STAPLES_PER_COLOR]]
 
 
 def _cards_in_deck(entries: list[CardEntry]) -> set[str]:
@@ -334,14 +358,14 @@ def analyze(entries: list[CardEntry]) -> dict:
 
     deck_names = _cards_in_deck(found)
     missing_staples: list[str] = []
+    ci_tuple = tuple(sorted(commander_ci))
 
-    # Always check colorless staples
-    for card in STAPLES_BY_COLOR["C"]:
+    for card in _staples_for_color("C", ()):
         if card.lower() not in deck_names:
             missing_staples.append(card)
 
     for color in commander_ci:
-        for card in STAPLES_BY_COLOR.get(color, []):
+        for card in _staples_for_color(color, ci_tuple):
             if card.lower() not in deck_names and card not in missing_staples:
                 missing_staples.append(card)
 
